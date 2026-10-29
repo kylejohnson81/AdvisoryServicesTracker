@@ -911,6 +911,24 @@ tr.taskrow>td{background:#0f1c3f;padding:14px 16px 16px 46px}
         .lg-f.wide { grid-column: 1 / -1; }
         .lg-f input, .lg-f select, .lg-f textarea { background: var(--panel-alt); color: var(--ink); border: 1px solid var(--border); border-radius: 5px; padding: 6px 8px; font-size: 13px; font-family: inherit; }
         .lg-actions { display: flex; gap: 8px; margin-top: 10px; }
+        .lg-notes-head { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--border); }
+        .lg-filter { font-size: 12px; color: var(--ink-muted); margin-bottom: 8px; }
+        .lg-note-chip { border-color: #f4a05a; color: #f4a05a; }
+        .lg-note-body { font-size: 13px; line-height: 1.55; color: var(--ink); margin-top: 8px; overflow-x: auto; }
+        .lg-note-body p { margin: 0 0 8px; }
+        .lg-note-body h3 { font-size: 14px; font-weight: 700; margin: 10px 0 6px; }
+        .lg-note-body h4 { font-size: 13px; font-weight: 700; margin: 10px 0 4px; }
+        .lg-note-body ul, .lg-note-body ol { margin: 0 0 8px; padding-left: 22px; }
+        .lg-note-body li { margin: 2px 0; }
+        .lg-note-body blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 3px solid var(--border); color: var(--ink-muted); }
+        .lg-note-body a { color: #4f8fe8; }
+        .lg-note-body table { border-collapse: collapse; margin: 0 0 8px; font-size: 12.5px; }
+        .lg-note-body th, .lg-note-body td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+        .lg-rt-bar { display: flex; gap: 4px; flex-wrap: wrap; margin: 2px 0 4px; }
+        .lg-rt-bar button { all: unset; cursor: pointer; font-size: 12px; color: var(--ink); padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-alt); }
+        .lg-rt-bar button:hover { border-color: rgba(244,160,90,0.7); }
+        .lg-rt { min-height: 140px; max-height: 50vh; overflow-y: auto; background: var(--panel-alt); border: 1px solid var(--border); border-radius: 5px; padding: 8px 10px; margin-top: 0; outline: none; }
+        .lg-rt:focus { border-color: rgba(244,160,90,0.7); }
         .cmap-tip { position: absolute; pointer-events: none; background: #FFFFFF; color: #0A2245; padding: 9px 12px; border-radius: 7px; font-size: 12.5px; line-height: 1.45; box-shadow: 0 8px 24px rgba(0,0,0,0.35); max-width: 260px; z-index: 5; white-space: nowrap; }
         .cmap-tip b { display: block; font-size: 13.5px; margin-bottom: 2px; }
         .cmap-tip .ph { display: flex; align-items: center; gap: 6px; }
@@ -8135,25 +8153,155 @@ function LegislationItemEditor({ item, onSave, onCancel, saving }) {
   );
 }
 
-function LegislationPanel({ stateCode, items, onSaveItems, userEmail }) {
-  const [editing, setEditing] = useState(null); // item id, or "new"
+// Outside counsel notes are pasted from Word, Outlook or PDFs. Keep the
+// structure (headings, bold/italic, lists, links, tables) and drop everything
+// else (Word's mso styling, fonts, colours, scripts, images).
+const COUNSEL_TAGS = new Set(["P", "BR", "B", "STRONG", "I", "EM", "U", "UL", "OL", "LI", "H3", "H4", "BLOCKQUOTE", "A", "TABLE", "THEAD", "TBODY", "TR", "TH", "TD"]);
+function sanitizeCounselHtml(html) {
+  if (typeof DOMParser === "undefined" || typeof document === "undefined") return "";
+  const doc = new DOMParser().parseFromString(`<div>${html || ""}</div>`, "text/html");
+  const out = document.createElement("div");
+  const walk = (node, parent) => {
+    node.childNodes.forEach((n) => {
+      if (n.nodeType === 3) { parent.appendChild(document.createTextNode(n.textContent.replace(/ /g, " "))); return; }
+      if (n.nodeType !== 1) return;
+      let tag = n.tagName.toUpperCase();
+      if (["SCRIPT", "STYLE", "META", "LINK", "TITLE", "HEAD", "IMG", "SVG", "IFRAME", "OBJECT", "BUTTON", "INPUT", "SELECT", "TEXTAREA"].includes(tag) || tag.includes(":")) return;
+      if (tag === "H1" || tag === "H2") tag = "H3";
+      if (tag === "H5" || tag === "H6") tag = "H4";
+      if (tag === "DIV" || tag === "SECTION" || tag === "ARTICLE") tag = "P";
+      if (!COUNSEL_TAGS.has(tag)) {
+        // Unwrap (e.g. Word's spans), keeping bold/italic expressed as styles.
+        const st = (n.getAttribute && n.getAttribute("style")) || "";
+        let target = parent;
+        if (/font-weight\s*:\s*(bold|[6-9]00)/i.test(st)) { const b = document.createElement("strong"); target.appendChild(b); target = b; }
+        if (/font-style\s*:\s*italic/i.test(st)) { const i = document.createElement("em"); target.appendChild(i); target = i; }
+        walk(n, target);
+        return;
+      }
+      const el = document.createElement(tag);
+      if (tag === "A") {
+        const href = String(n.getAttribute("href") || "").trim();
+        if (safeHttpUrl(href) || /^mailto:/i.test(href)) { el.setAttribute("href", href); el.setAttribute("target", "_blank"); el.setAttribute("rel", "noopener noreferrer"); }
+      }
+      if ((tag === "TD" || tag === "TH") && /^\d+$/.test(n.getAttribute("colspan") || "")) el.setAttribute("colspan", n.getAttribute("colspan"));
+      parent.appendChild(el);
+      walk(n, el);
+    });
+  };
+  walk(doc.body.firstChild, out);
+  out.querySelectorAll("p, li, h3, h4, strong, b, em, i, u").forEach((e) => { if (!e.textContent.trim() && !e.querySelector("br, table")) e.remove(); });
+  return out.innerHTML.trim();
+}
+// Plain text (e.g. from a PDF or a plain-text email) → paragraphs and lists.
+function counselTextToHtml(text) {
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const lines = String(text || "").replace(/\r\n?/g, "\n").split("\n");
+  const out = []; let list = null; let para = [];
+  const flushPara = () => { if (para.length) { out.push(`<p>${para.map(esc).join("<br>")}</p>`); para = []; } };
+  const flushList = () => { if (list) { out.push(`<${list.tag}>${list.items.map((x) => `<li>${esc(x)}</li>`).join("")}</${list.tag}>`); list = null; } };
+  lines.forEach((raw) => {
+    const line = raw.trim();
+    const ul = line.match(/^[-*•▪◦·]\s+(.*)$/);
+    const ol = line.match(/^(\d+|[a-z])[.)]\s+(.*)$/i);
+    if (!line) { flushPara(); flushList(); return; }
+    if (ul || ol) {
+      flushPara();
+      const tag = ul ? "ul" : "ol";
+      if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
+      list.items.push(ul ? ul[1] : ol[2]);
+      return;
+    }
+    flushList(); para.push(line);
+  });
+  flushPara(); flushList();
+  return out.join("");
+}
+
+function CounselNoteEditor({ note, measures, onSave, onCancel, saving }) {
+  const [d, setD] = useState(note);
+  const bodyRef = React.useRef(null);
+  useEffect(() => { if (bodyRef.current) bodyRef.current.innerHTML = sanitizeCounselHtml(note.html || ""); }, []);
+  const set = (k) => (e) => setD((x) => ({ ...x, [k]: e.target.value }));
+  const onPaste = (e) => {
+    const cd = e.clipboardData; if (!cd) return;
+    e.preventDefault();
+    const html = cd.getData("text/html");
+    const clean = html ? sanitizeCounselHtml(html) : counselTextToHtml(cd.getData("text/plain"));
+    document.execCommand("insertHTML", false, clean);
+  };
+  const cmd = (c, v) => (e) => { e.preventDefault(); document.execCommand(c, false, v); if (bodyRef.current) bodyRef.current.focus(); };
+  const save = () => onSave({ ...d, html: sanitizeCounselHtml(bodyRef.current ? bodyRef.current.innerHTML : "") });
+  return (
+    <div className="lg-edit">
+      <div className="lg-grid">
+        <label className="lg-f wide"><span>Title</span><input value={d.title || ""} onChange={set("title")} placeholder="e.g. Memo on AB 1414 opt-out requirements" /></label>
+        <label className="lg-f"><span>From (firm / attorney)</span><input value={d.from || ""} onChange={set("from")} /></label>
+        <label className="lg-f"><span>Date</span><input type="date" value={d.date || ""} onChange={set("date")} /></label>
+        <label className="lg-f wide"><span>Related measure</span>
+          <select value={d.measureId || ""} onChange={set("measureId")}>
+            <option value="">General (whole state)</option>
+            {measures.map((m) => <option key={m.id} value={m.id}>{m.measure}{m.level !== "State" ? ` (${m.jurisdiction})` : ""}</option>)}
+          </select>
+        </label>
+        <div className="lg-f wide"><span>Note — paste from Word, Outlook or a PDF; formatting is kept</span>
+          <div className="lg-rt-bar">
+            <button onMouseDown={cmd("bold")} title="Bold"><b>B</b></button>
+            <button onMouseDown={cmd("italic")} title="Italic"><i>I</i></button>
+            <button onMouseDown={cmd("formatBlock", "H4")} title="Heading">H</button>
+            <button onMouseDown={cmd("formatBlock", "P")} title="Paragraph">¶</button>
+            <button onMouseDown={cmd("insertUnorderedList")} title="Bulleted list">• List</button>
+            <button onMouseDown={cmd("insertOrderedList")} title="Numbered list">1. List</button>
+            <button onMouseDown={cmd("removeFormat")} title="Clear formatting">Clear</button>
+          </div>
+          <div ref={bodyRef} className="lg-rt lg-note-body" contentEditable suppressContentEditableWarning onPaste={onPaste} />
+        </div>
+      </div>
+      <div className="lg-actions">
+        <button className="btn-primary" disabled={saving || !String(d.title || "").trim()} onClick={save}>{saving ? "Saving…" : "Save note"}</button>
+        <button className="btn-ghost" onClick={onCancel} disabled={saving}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function LegislationPanel({ stateCode, items, notes, onSave, userEmail }) {
+  const [editing, setEditing] = useState(null); // measure id, "new", "note:<id>" or "note:new"
+  const [noteFilter, setNoteFilter] = useState(null); // measure id to filter counsel notes by
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
+  const notesRef = React.useRef(null);
   const mine = items.filter((x) => x.state === stateCode);
+  const myNotes = (notes || []).filter((n) => n.state === stateCode).sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  const shownNotes = noteFilter ? myNotes.filter((n) => n.measureId === noteFilter) : myNotes;
+  const notesFor = (id) => myNotes.filter((n) => n.measureId === id).length;
   const order = { High: 0, Medium: 1, Low: 2 };
   // Groups (statewide / city / county) ordered by their most significant measure.
   const best = (xs) => Math.min(...xs.map((x) => order[x.impact] ?? 3));
   const groups = LEGIS_LEVELS.map((lv) => [lv, mine.filter((x) => (x.level || "State") === lv)]).filter(([, xs]) => xs.length)
     .sort((a, b) => best(a[1]) - best(b[1]));
-  const save = async (next) => {
+  const save = async (nextItems, nextNotes) => {
     setSaving(true); setErr(null);
-    try { await onSaveItems(next); setEditing(null); } catch (e) { setErr(e.message || String(e)); }
+    try { await onSave(nextItems, nextNotes); setEditing(null); } catch (e) { setErr(e.message || String(e)); }
     setSaving(false);
   };
   const stamp = (x) => ({ ...x, updatedBy: userEmail || "unknown", updatedAt: new Date().toISOString() });
-  const upsertItem = (d) => save(items.some((x) => x.id === d.id) ? items.map((x) => (x.id === d.id ? stamp(d) : x)) : [...items, stamp(d)]);
-  const removeItem = (id) => { if (window.confirm("Remove this measure from the tracker?")) save(items.filter((x) => x.id !== id)); };
+  const upsertItem = (d) => save(items.some((x) => x.id === d.id) ? items.map((x) => (x.id === d.id ? stamp(d) : x)) : [...items, stamp(d)], notes || []);
+  const removeItem = (id) => {
+    const linked = notesFor(id);
+    if (window.confirm(`Remove this measure from the tracker?${linked ? ` Its ${linked} counsel ${linked === 1 ? "note stays" : "notes stay"} as general state notes.` : ""}`))
+      save(items.filter((x) => x.id !== id), (notes || []).map((n) => (n.measureId === id ? { ...n, measureId: "" } : n)));
+  };
+  const upsertNote = (d) => {
+    const all = notes || [];
+    const next = all.some((n) => n.id === d.id) ? all.map((n) => (n.id === d.id ? stamp(d) : n)) : [...all, { ...stamp(d), addedBy: userEmail || "unknown", addedAt: new Date().toISOString() }];
+    save(items, next);
+  };
+  const removeNote = (id) => { if (window.confirm("Remove this counsel note?")) save(items, (notes || []).filter((n) => n.id !== id)); };
+  const showNotesFor = (id) => { setNoteFilter(id); setTimeout(() => notesRef.current && notesRef.current.scrollIntoView({ behavior: "smooth", block: "start" }), 0); };
   const blank = { id: `${stateCode.toLowerCase()}-${Date.now()}`, state: stateCode, level: "State", jurisdiction: US_STATE_NAMES[stateCode] || stateCode, measure: "", title: "", category: "Bulk billing / opt-out", status: "Pending", impact: "Medium", effective: "", lastAction: "", summary: "", bulkImpact: "", source: "" };
+  const blankNote = { id: `note-${stateCode.toLowerCase()}-${Date.now()}`, state: stateCode, measureId: noteFilter || "", title: "", from: "", date: TODAY, html: "" };
+  const measureName = (id) => { const m = mine.find((x) => x.id === id); return m ? m.measure : null; };
   return (
     <div className="lg-panel">
       <div className="lg-head">
@@ -8186,10 +8334,38 @@ function LegislationPanel({ stateCode, items, onSaveItems, userEmail }) {
                 {x.effective && <span>Effective {fmtDate(x.effective)}</span>}
                 {x.lastAction && <span>{x.lastAction}</span>}
                 {safeHttpUrl(x.source) && <a href={safeHttpUrl(x.source)} target="_blank" rel="noopener noreferrer">Source</a>}
+                {notesFor(x.id) > 0 && <button className="link" onClick={() => showNotesFor(x.id)}>{notesFor(x.id)} counsel {notesFor(x.id) === 1 ? "note" : "notes"}</button>}
                 {x.updatedAt && <span className="lg-upd">Edited {fmtDate(x.updatedAt.slice(0, 10))}{x.updatedBy ? ` by ${x.updatedBy}` : ""}</span>}
               </div>
             </div>
           ))}
+        </div>
+      ))}
+
+      <div className="lg-head lg-notes-head" ref={notesRef}>
+        <h3>Outside counsel notes</h3>
+        <button className="btn-ghost" onClick={() => setEditing("note:new")} disabled={!!editing}>+ Add counsel note</button>
+      </div>
+      {noteFilter && <div className="lg-filter">Showing notes on {measureName(noteFilter) || "one measure"} · <button className="link" onClick={() => setNoteFilter(null)}>Show all</button></div>}
+      {editing === "note:new" && <CounselNoteEditor note={blankNote} measures={mine} saving={saving} onCancel={() => setEditing(null)} onSave={upsertNote} />}
+      {!shownNotes.length && editing !== "note:new" && <div className="lg-empty">No counsel notes yet. Paste a memo or email from outside counsel with “Add counsel note.”</div>}
+      {shownNotes.map((n) => editing === `note:${n.id}` ? (
+        <CounselNoteEditor key={n.id} note={n} measures={mine} saving={saving} onCancel={() => setEditing(null)} onSave={upsertNote} />
+      ) : (
+        <div key={n.id} className="lg-card lg-note">
+          <div className="lg-card-top">
+            <b>{n.title}</b>
+            {n.measureId && measureName(n.measureId) && <span className="lg-chip lg-note-chip">{measureName(n.measureId)}</span>}
+            <span className="lg-sp" />
+            <button className="link" onClick={() => setEditing(`note:${n.id}`)} disabled={!!editing}>Edit</button>
+            <button className="link" onClick={() => removeNote(n.id)} disabled={!!editing}>Remove</button>
+          </div>
+          <div className="lg-meta" style={{ marginTop: 2 }}>
+            {n.from && <span>{n.from}</span>}
+            {n.date && <span>{fmtDate(n.date)}</span>}
+            {(n.updatedBy || n.addedBy) && <span className="lg-upd">Added by {n.addedBy || n.updatedBy}{n.updatedAt && n.addedAt && n.updatedAt !== n.addedAt ? `, edited ${fmtDate(n.updatedAt.slice(0, 10))}` : ""}</span>}
+          </div>
+          <div className="lg-note-body" dangerouslySetInnerHTML={{ __html: sanitizeCounselHtml(n.html) }} />
         </div>
       ))}
     </div>
@@ -8208,7 +8384,8 @@ function ClientMapView({ properties, onOpenProperty, legislation, onSaveLegislat
   const [showPins, setShowPins] = useState(true);
   const [selState, setSelState] = useState(null); // postal code of the state being viewed
   const wrapRef = React.useRef(null);
-  const legisItems = legislation || LEGIS_SEED;
+  const legisItems = (legislation && legislation.items) || LEGIS_SEED;
+  const legisNotes = (legislation && legislation.notes) || [];
 
   useEffect(() => { loadUsAtlas().then(setAtlas).catch(() => setAtlasError(true)); }, []);
 
@@ -8414,7 +8591,7 @@ function ClientMapView({ properties, onOpenProperty, legislation, onSaveLegislat
           )}
         </div>
         {selState && (
-          <LegislationPanel stateCode={selState} items={legisItems} onSaveItems={onSaveLegislation} userEmail={userEmail} />
+          <LegislationPanel stateCode={selState} items={legisItems} notes={legisNotes} onSave={onSaveLegislation} userEmail={userEmail} />
         )}
       </div>
 
@@ -8734,7 +8911,7 @@ function App() {
       const { data: billingRow } = await supabaseClient.from("app_state").select("value").eq("key", RT_STATE_KEY).maybeSingle();
       if (billingRow && billingRow.value) setBillingImport(billingRow.value);
       const { data: legisRow } = await supabaseClient.from("app_state").select("value").eq("key", LEGIS_STATE_KEY).maybeSingle();
-      if (legisRow && legisRow.value && Array.isArray(legisRow.value.items)) setLegislation(legisRow.value.items);
+      if (legisRow && legisRow.value && Array.isArray(legisRow.value.items)) setLegislation({ items: legisRow.value.items, notes: Array.isArray(legisRow.value.notes) ? legisRow.value.notes : [] });
       loadChangeLog();
       setDataSyncStatus("shared");
 
@@ -8859,14 +9036,17 @@ function App() {
   };
 
   // Saves the legislation tracker (the whole list), then reads it back to confirm.
-  const saveLegislation = async (items) => {
+  const saveLegislation = async (items, notes) => {
     if (!supabaseClient) throw new Error("Not connected to the shared database.");
-    const value = { items, updated_at: new Date().toISOString(), updated_by: session && session.user ? session.user.email : null };
+    // Keep the weekly check's log and any other keys; replace measures and notes.
+    const { data: cur } = await supabaseClient.from("app_state").select("value").eq("key", LEGIS_STATE_KEY).maybeSingle();
+    const prev = (cur && cur.value) || {};
+    const value = { ...prev, items, notes: notes || prev.notes || [], updated_at: new Date().toISOString(), updated_by: session && session.user ? session.user.email : null };
     const { error } = await supabaseClient.from("app_state").upsert({ key: LEGIS_STATE_KEY, value });
     if (error) throw new Error(error.message);
     const { data: check } = await supabaseClient.from("app_state").select("value").eq("key", LEGIS_STATE_KEY).maybeSingle();
     if (!check || !check.value || check.value.updated_at !== value.updated_at) throw new Error("the save didn't stick — you may have read-only access");
-    setLegislation(check.value.items);
+    setLegislation({ items: check.value.items, notes: check.value.notes || [] });
   };
 
   // Saves a Revenue Tracker import, replacing the previous one.
