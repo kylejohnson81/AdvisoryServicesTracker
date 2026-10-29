@@ -5744,6 +5744,9 @@ function parseIroncladAllStatusSheet(workbook) {
     const r = rows[i];
     const nameField = r[idx["Record Name"]];
     if (!nameField || r[idx["Record Type"]] !== "connectedLivingAdvisoryServicesAgreement") continue;
+    // Terminated agreements never create, update or count: Ironclad prefixes their
+    // Record Name with "(TERMINATED)" (and may set the status to terminated).
+    if (/^\s*\(terminated\)/i.test(String(nameField)) || /terminat/i.test(String(r[idx["Contract Status"]] || ""))) continue;
 
     const propName = String(nameField).split(/ - Connected Living - Advisory Services Agreement| - Advisory Services Agreement/)[0].trim();
     const key = SMART_IMPORT_ALIASES[propName.toLowerCase()] || propName.toLowerCase();
