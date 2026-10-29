@@ -860,7 +860,56 @@ tr.taskrow>td{background:#0f1c3f;padding:14px 16px 16px 46px}
         .cmap-nation { fill: none; stroke: #4f8fe8; stroke-width: 1.8; stroke-linejoin: round; }
         .cmap-pin { cursor: pointer; }
         .cmap-pin .dot { stroke: #0A2245; stroke-width: 1.8; transition: r 0.12s; }
-        .cmap-pin:hover .dot { r: 9; }
+        .cmap-pin:hover .dot { r: 7; }
+        .cmap-pin.big:hover .dot { r: 11; }
+        .cmap-pin-label { fill: var(--ink); font-size: 11px; text-anchor: middle; pointer-events: none; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
+        .cmap-state:hover { filter: brightness(1.18); }
+        .cmap-state.lg-active { fill: rgba(244,160,90,0.36); stroke: rgba(244,160,90,0.85); }
+        .cmap-state.lg-access { fill: rgba(244,160,90,0.13); stroke: rgba(244,160,90,0.45); }
+        .cmap-state.dim { opacity: 0.35; }
+        .cmap-state.sel { stroke: #f4a05a; stroke-width: 1.6; }
+        .cmap-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .cmap-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); cursor: pointer; }
+        .cmap-back { font-size: 14px; margin-right: 6px; }
+        .cmap-lg-key { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink); padding: 4px 6px; }
+        .cmap-lg-key .box { width: 14px; height: 10px; border-radius: 2px; border: 1px solid rgba(244,160,90,0.85); }
+        .cmap-lg-key .box.active { background: rgba(244,160,90,0.45); }
+        .cmap-lg-key .box.access { background: rgba(244,160,90,0.15); border-color: rgba(244,160,90,0.45); }
+        .cmap-states { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+        .cmap-states button { all: unset; cursor: pointer; font-size: 12px; padding: 3px 9px; border-radius: 99px; color: var(--ink); border: 1px solid rgba(244,160,90,0.7); background: rgba(244,160,90,0.18); }
+        .cmap-states button.access { border-color: rgba(244,160,90,0.35); background: transparent; color: var(--ink-muted); }
+        .cmap-states button:hover { background: rgba(244,160,90,0.32); }
+        .cmap-body.split { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(320px, 1fr); gap: 14px; align-items: start; }
+        @media (max-width: 1000px) { .cmap-body.split { grid-template-columns: 1fr; } }
+        .cmap-fed { color: var(--ink-muted); font-size: 12.5px; margin-top: 10px; line-height: 1.5; }
+        .cmap-fed a { color: #4f8fe8; }
+        .lg-panel { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; max-height: 78vh; overflow-y: auto; }
+        .lg-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+        .lg-head h3 { font-size: 15px; font-weight: 600; }
+        .lg-err { color: #ff8f86; font-size: 12.5px; margin-bottom: 8px; }
+        .lg-empty { color: var(--ink-muted); font-size: 13px; padding: 8px 0; }
+        .lg-group { margin-bottom: 12px; }
+        .lg-group-h { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-muted); margin: 4px 0 6px; }
+        .lg-card { border: 1px solid var(--border); border-radius: 7px; padding: 10px 12px; margin-bottom: 8px; background: var(--panel); }
+        .lg-card-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 13.5px; }
+        .lg-card-top .link { font-size: 12px; }
+        .lg-jur { color: var(--ink-muted); font-size: 12.5px; }
+        .lg-chip { font-size: 11px; border: 1px solid; border-radius: 99px; padding: 1px 7px; }
+        .lg-cat { font-size: 11.5px; color: var(--ink-muted); }
+        .lg-sp { flex: 1; }
+        .lg-title { font-size: 13px; margin-top: 5px; color: var(--ink); }
+        .lg-sum { font-size: 12.5px; margin-top: 4px; color: var(--ink-muted); line-height: 1.45; }
+        .lg-imp { font-size: 12.5px; margin-top: 5px; line-height: 1.45; color: var(--ink); }
+        .lg-imp span { color: #f4a05a; font-weight: 600; }
+        .lg-meta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; font-size: 11.5px; color: var(--ink-muted); }
+        .lg-meta a { color: #4f8fe8; }
+        .lg-upd { font-style: italic; }
+        .lg-edit { border: 1px solid rgba(244,160,90,0.6); border-radius: 7px; padding: 12px; margin-bottom: 8px; background: var(--panel); }
+        .lg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+        .lg-f { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--ink-muted); }
+        .lg-f.wide { grid-column: 1 / -1; }
+        .lg-f input, .lg-f select, .lg-f textarea { background: var(--panel-alt); color: var(--ink); border: 1px solid var(--border); border-radius: 5px; padding: 6px 8px; font-size: 13px; font-family: inherit; }
+        .lg-actions { display: flex; gap: 8px; margin-top: 10px; }
         .cmap-tip { position: absolute; pointer-events: none; background: #FFFFFF; color: #0A2245; padding: 9px 12px; border-radius: 7px; font-size: 12.5px; line-height: 1.45; box-shadow: 0 8px 24px rgba(0,0,0,0.35); max-width: 260px; z-index: 5; white-space: nowrap; }
         .cmap-tip b { display: block; font-size: 13.5px; margin-bottom: 2px; }
         .cmap-tip .ph { display: flex; align-items: center; gap: 6px; }
@@ -7956,7 +8005,194 @@ function loadUsAtlas() {
   return US_ATLAS_PROMISE;
 }
 
-function ClientMapView({ properties, onOpenProperty }) {
+/* ---------------------------------------------------------
+   LEGISLATION TRACKER — state and local measures that could affect
+   bulk internet / fee-based programs (bulk billing and opt-outs,
+   mandatory provider access, fee caps, fee disclosure and all-in
+   pricing). Stored in app_state under "legislationTracker"; the seed
+   below is the October 29, 2026 research baseline and is used until
+   someone saves edits.
+--------------------------------------------------------- */
+const LEGIS_STATE_KEY = "legislationTracker";
+const LEGIS_CATEGORIES = ["Bulk billing / opt-out", "Mandatory access", "Fee caps / pass-through", "Fee disclosure / all-in pricing", "Other"];
+const LEGIS_STATUSES = ["Enacted", "In effect (regulation)", "Passed, not yet effective", "Pending", "Proposed rule", "Carried over", "Failed", "Watch"];
+const LEGIS_IMPACTS = ["High", "Medium", "Low"];
+const LEGIS_LEVELS = ["State", "City", "County", "Federal"];
+const US_STATE_NAMES = { AL: "Alabama", AK: "Alaska", AZ: "Arizona", AR: "Arkansas", CA: "California", CO: "Colorado", CT: "Connecticut", DE: "Delaware", DC: "District of Columbia", FL: "Florida", GA: "Georgia", HI: "Hawaii", ID: "Idaho", IL: "Illinois", IN: "Indiana", IA: "Iowa", KS: "Kansas", KY: "Kentucky", LA: "Louisiana", ME: "Maine", MD: "Maryland", MA: "Massachusetts", MI: "Michigan", MN: "Minnesota", MS: "Mississippi", MO: "Missouri", MT: "Montana", NE: "Nebraska", NV: "Nevada", NH: "New Hampshire", NJ: "New Jersey", NM: "New Mexico", NY: "New York", NC: "North Carolina", ND: "North Dakota", OH: "Ohio", OK: "Oklahoma", OR: "Oregon", PA: "Pennsylvania", RI: "Rhode Island", SC: "South Carolina", SD: "South Dakota", TN: "Tennessee", TX: "Texas", UT: "Utah", VT: "Vermont", VA: "Virginia", WA: "Washington", WV: "West Virginia", WI: "Wisconsin", WY: "Wyoming" };
+const US_STATE_BY_NAME = Object.fromEntries(Object.entries(US_STATE_NAMES).map(([k, v]) => [v.toLowerCase(), k]));
+const FCC_MA = "https://docs.fcc.gov/public/attachments/FCC-03-9A1.pdf";
+
+const LEGIS_SEED = [
+  // California
+  { id: "ca-ab1414", state: "CA", level: "State", jurisdiction: "California", measure: "AB 1414", title: "Tenant opt-out of landlord-arranged internet subscriptions", category: "Bulk billing / opt-out", status: "Enacted", impact: "High", effective: "2026-01-01", lastAction: "Signed 2025; applies to tenancies beginning or renewing on or after Jan 1, 2026", summary: "Renters may opt out of paying for internet, cellular or satellite service the landlord bulk-bills through a third-party provider. If no opt-out is offered, the tenant may deduct the cost from rent. HOA/owner communities exempted by late amendment.", bulkImpact: "Directly undercuts guaranteed take rate for California bulk agreements; programs need an opt-out path and pricing that holds up with opt-outs.", source: "https://naahq.org/news/california-allow-bulk-billing-opt-outs" },
+  { id: "ca-sb478", state: "CA", level: "State", jurisdiction: "California", measure: "SB 478", title: "Honest Pricing Law (all-in pricing)", category: "Fee disclosure / all-in pricing", status: "Enacted", impact: "Low", effective: "2024-07-01", lastAction: "In effect", summary: "Advertised prices must include all mandatory fees.", bulkImpact: "Mandatory technology/internet fees must be built into advertised rent.", source: "https://igniterevs.com/the-ignite-intelligence-engine/multifamily-revenue-laws/" },
+  { id: "ca-sf-art52", state: "CA", level: "City", jurisdiction: "San Francisco", measure: "Police Code Article 52", title: "Resident choice of communications provider", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "2016-12-01", lastAction: "Partly preempted by the FCC in 2019", summary: "Residents may choose their telecom provider; owners must allow and facilitate new provider installations on request.", bulkImpact: "Limits exclusivity in San Francisco buildings; competing providers can be required to get access.", source: "https://realtycompartners.com/update-regulatory-compliance-in-telecom-understanding-the-federal-state-and-local-laws-impacting-resident-choice-at-your-property/" },
+  // Colorado
+  { id: "co-hb23-1095", state: "CO", level: "State", jurisdiction: "Colorado", measure: "HB 23-1095", title: "Cap on markups for bulk telecom services", category: "Fee caps / pass-through", status: "Enacted", impact: "High", effective: "2023-06-05", lastAction: "Applies to agreements entered on or after June 5, 2023", summary: "Owner markups on bulk telecom services capped at 2% or $10 above the owner's cost; conflicting lease terms are void.", bulkImpact: "Limits ancillary margin on Colorado bulk programs.", source: "https://realtycompartners.com/update-regulatory-compliance-in-telecom-understanding-the-federal-state-and-local-laws-impacting-resident-choice-at-your-property/" },
+  { id: "co-hb24-1334", state: "CO", level: "State", jurisdiction: "Colorado", measure: "HB 24-1334", title: "Provider access to residential properties", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "2024-06-01", lastAction: "Signed 2024", summary: "Owners must allow licensed, insured providers to install service in designated spaces when a tenant requests it, with fair compensation.", bulkImpact: "Competing providers can enter bulk properties at a resident's request.", source: "https://realtycompartners.com/update-regulatory-compliance-in-telecom-understanding-the-federal-state-and-local-laws-impacting-resident-choice-at-your-property/" },
+  { id: "co-hb25-1090", state: "CO", level: "State", jurisdiction: "Colorado", measure: "HB 25-1090", title: "Protections against deceptive pricing (all-in rent)", category: "Fee disclosure / all-in pricing", status: "Enacted", impact: "Low", effective: "2026-01-01", lastAction: "In effect", summary: "Bans drip pricing; advertised rent must show a total price including mandatory fees.", bulkImpact: "Mandatory bulk/tech fees must be included in advertised rent.", source: "https://igniterevs.com/the-ignite-intelligence-engine/multifamily-revenue-laws/" },
+  // Oregon
+  { id: "or-ors90315", state: "OR", level: "State", jurisdiction: "Oregon", measure: "ORS 90.315", title: "Limits on landlord charges for utilities and cable/internet", category: "Fee caps / pass-through", status: "Enacted", impact: "Medium", effective: "", lastAction: "In effect", summary: "Limits what landlords can charge tenants for internet, cable or video services, keeping charges at or below what residents would pay contracting directly.", bulkImpact: "Caps resident pricing on Oregon bulk programs.", source: "https://realtycompartners.com/update-regulatory-compliance-in-telecom-understanding-the-federal-state-and-local-laws-impacting-resident-choice-at-your-property/" },
+  { id: "or-sb430", state: "OR", level: "State", jurisdiction: "Oregon", measure: "SB 430", title: "All-in pricing for online prices", category: "Fee disclosure / all-in pricing", status: "Enacted", impact: "Low", effective: "2026-01-01", lastAction: "In effect", summary: "Online prices must include all mandatory fees (general consumer law).", bulkImpact: "Mandatory tech fees belong in advertised totals.", source: "https://igniterevs.com/the-ignite-intelligence-engine/multifamily-revenue-laws/" },
+  // Washington
+  { id: "wa-seattle-cb121254", state: "WA", level: "City", jurisdiction: "Seattle", measure: "CB 121254", title: "Rental junk fee ban and fee disclosure", category: "Fee caps / pass-through", status: "Passed, not yet effective", impact: "High", effective: "2027-07-01", lastAction: "Passed 8-0 on Aug 12, 2026; applies to leases and renewals after July 1, 2027", summary: "Bans most rental fees. Optional services (including internet/cable) require written opt-in, notice of how to opt out and penalty-free cancellation; third-party services generally capped at the landlord's actual cost. Leases must show all mandatory and optional fees and the total monthly cost.", bulkImpact: "Mandatory bulk internet fees likely not chargeable in Seattle after July 2027 unless opt-in; check final ordinance text on bundles.", source: "https://propertymanagersseattle.com/seattle-rental-junk-fee-ordinance/" },
+  { id: "wa-state-fees-2025", state: "WA", level: "State", jurisdiction: "Washington", measure: "2025 rental fee ban (removed)", title: "Statewide ban on most mandatory rental fees", category: "Fee caps / pass-through", status: "Watch", impact: "Low", effective: "", lastAction: "Fee language stripped from the 2025 bill; watch the 2027 session", summary: "A 2025 bill would have banned most mandatory rental fees statewide; the fee provisions were removed before passage. Bellingham and Olympia have similar local restrictions; Shoreline bans common-area utility charges.", bulkImpact: "Statewide version could return; Seattle's ordinance is the model.", source: "https://www.spokesman.com/stories/2026/sep/03/wa-tenants-dread-rental-fees-could-an-end-be-in-si/" },
+  // New York
+  { id: "ny-psl228", state: "NY", level: "State", jurisdiction: "New York", measure: "Pub. Serv. Law § 228", title: "Mandatory cable access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "1995-01-01", lastAction: "In effect", summary: "Landlords must permit cable installation and may not demand payment from tenants for it or set different rents for tenants who take service.", bulkImpact: "Franchised cable providers can enter bulk buildings.", source: FCC_MA },
+  { id: "ny-s7601", state: "NY", level: "State", jurisdiction: "New York", measure: "S7601 / A8131", title: "Municipal broadband access to multifamily housing", category: "Mandatory access", status: "Pending", impact: "Medium", effective: "", lastAction: "Referred to Senate Energy & Telecommunications, Jan 7, 2026", summary: "Extends § 228 tenant-access protections to municipal broadband providers; landlords could not block, charge for, or price rent around that service.", bulkImpact: "Would open bulk buildings to municipal ISPs.", source: "https://www.nysenate.gov/legislation/bills/2025/S7601" },
+  { id: "ny-s363a", state: "NY", level: "State", jurisdiction: "New York", measure: "S.363A", title: "Drip pricing ban (all-in pricing)", category: "Fee disclosure / all-in pricing", status: "Pending", impact: "Low", effective: "", lastAction: "Advanced by the Senate, May 12, 2026", summary: "Would require mandatory fees to be included in total advertised prices.", bulkImpact: "Mandatory tech fees in advertised totals.", source: "https://igniterevs.com/the-ignite-intelligence-engine/multifamily-revenue-laws/" },
+  { id: "ny-nyc-dcwp", state: "NY", level: "City", jurisdiction: "New York City", measure: "DCWP proposed junk fee rule", title: "All-in pricing across industries, including rentals", category: "Fee disclosure / all-in pricing", status: "Proposed rule", impact: "Medium", effective: "", lastAction: "Comments and public hearing Aug 7, 2026", summary: "Total prices must include all mandatory fees; other fees disclosed before consent; no misrepresented fees. Rentals named as an affected industry.", bulkImpact: "Mandatory technology/internet fees would need to be in quoted rent in NYC.", source: "https://www.kelleydrye.com/viewpoints/blogs/ad-law-access/junk-fees-summer-2026-roundup-part-1-illinois-nyc-and-dc" },
+  // Massachusetts
+  { id: "ma-940cmr317", state: "MA", level: "State", jurisdiction: "Massachusetts", measure: "940 CMR 3.17", title: "Attorney General landlord-tenant regulations (internet fees)", category: "Fee disclosure / all-in pricing", status: "In effect (regulation)", impact: "Medium", effective: "", lastAction: "In effect", summary: "Requires clear lease disclosure of internet fees and limits excessive or unfair charges.", bulkImpact: "Bulk/tech fees must be disclosed in the lease and reasonable.", source: "https://realtycompartners.com/update-regulatory-compliance-in-telecom-understanding-the-federal-state-and-local-laws-impacting-resident-choice-at-your-property/" },
+  { id: "ma-940cmr38", state: "MA", level: "State", jurisdiction: "Massachusetts", measure: "940 CMR 38.00", title: "Total price in housing advertising", category: "Fee disclosure / all-in pricing", status: "In effect (regulation)", impact: "Low", effective: "2025-09-02", lastAction: "In effect", summary: "Housing providers must show a total price including mandatory fees.", bulkImpact: "Mandatory tech fees in advertised totals.", source: "https://igniterevs.com/the-ignite-intelligence-engine/multifamily-revenue-laws/" },
+  { id: "ma-166a22", state: "MA", level: "State", jurisdiction: "Massachusetts", measure: "M.G.L. c. 166A § 22", title: "Mandatory cable access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "1995-01-01", lastAction: "In effect (cable only; does not cover broadband)", summary: "Landlords must allow cable TV providers into tenants' units.", bulkImpact: "Cable operators can enter bulk buildings.", source: FCC_MA },
+  { id: "ma-h101", state: "MA", level: "State", jurisdiction: "Massachusetts", measure: "H.101", title: "Free broadband in public housing", category: "Other", status: "Pending", impact: "Low", effective: "", lastAction: "Filed Jan 2025 (194th General Court)", summary: "Would make no-charge broadband a requirement of decent, safe and sanitary public housing.", bulkImpact: "Public housing only.", source: "https://malegislature.gov/Bills/194/H101.pdf" },
+  // Illinois
+  { id: "il-hb3564", state: "IL", level: "State", jurisdiction: "Illinois", measure: "HB 3564", title: "Rental Fee Transparency and Limitations Act", category: "Fee disclosure / all-in pricing", status: "Passed, not yet effective", impact: "Medium", effective: "2027-01-01", lastAction: "Signed June 2026 (trailer HB 5234 moved effective date to Jan 1, 2027)", summary: "All non-optional fees must appear on the first page of the lease and in listings with rent; a fee not listed there isn't owed. Bans several fees and caps application fees.", bulkImpact: "Mandatory bulk/tech fees must be on lease page one or they're unenforceable.", source: "https://chicagorealtor.com/house-bill-3564-signed-into-law-by-governor/" },
+  { id: "il-hb228", state: "IL", level: "State", jurisdiction: "Illinois", measure: "HB 228 (PA 104-0472)", title: "Junk fee ban (all-in pricing)", category: "Fee disclosure / all-in pricing", status: "Passed, not yet effective", impact: "Low", effective: "2027-01-01", lastAction: "Signed 2026", summary: "Prohibits advertising prices that omit mandatory fees.", bulkImpact: "Mandatory tech fees in advertised totals.", source: "https://www.kelleydrye.com/viewpoints/blogs/ad-law-access/junk-fees-summer-2026-roundup-part-1-illinois-nyc-and-dc" },
+  { id: "il-cable-access", state: "IL", level: "State", jurisdiction: "Illinois", measure: "55 ILCS 5/5-1096", title: "Mandatory cable access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "1993-01-01", lastAction: "In effect", summary: "Requires owners to allow cable operator access (as cited by the FCC).", bulkImpact: "Cable operators can enter bulk buildings.", source: FCC_MA },
+  { id: "il-chicago-pro", state: "IL", level: "City", jurisdiction: "Chicago", measure: "Protecting Renters Ordinance", title: "Deposit cap and move-in fee limits", category: "Fee caps / pass-through", status: "Pending", impact: "Low", effective: "", lastAction: "Proposed 2026; not yet adopted", summary: "Would cap security deposits at one month's rent and effectively prohibit move-in fees.", bulkImpact: "No internet provisions; watch for added fee limits.", source: "https://chicagorealtor.com/chicagos-protecting-renters-ordinance-house-bill-3564-legislative-updates-you-need-to-know/" },
+  // Pennsylvania
+  { id: "pa-hb2590", state: "PA", level: "State", jurisdiction: "Pennsylvania", measure: "HB 2590", title: "Internet bulk pricing (Landlord and Tenant Act)", category: "Bulk billing / opt-out", status: "Pending", impact: "High", effective: "", lastAction: "House Consumer Protection, Technology & Utilities voting meeting scheduled Sep 29, 2026; confirm outcome", summary: "Sponsor memo: 'Limiting Bulk Billing for Internet Services'. Amends the Landlord and Tenant Act of 1951 to address internet bulk pricing.", bulkImpact: "Direct bulk billing restriction if enacted.", source: "https://www.palegis.us/legislation/bills/2025/hb2590" },
+  { id: "pa-cable-access", state: "PA", level: "State", jurisdiction: "Pennsylvania", measure: "68 P.S. § 250.503-B", title: "Mandatory cable access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "1993-01-01", lastAction: "In effect", summary: "Requires landlords to allow cable access for tenants (as cited by the FCC).", bulkImpact: "Cable operators can enter bulk buildings.", source: FCC_MA },
+  // Virginia
+  { id: "va-hb1409", state: "VA", level: "State", jurisdiction: "Virginia", measure: "HB 1409 (2026)", title: "Prohibited fees in rental agreements", category: "Fee caps / pass-through", status: "Carried over", impact: "High", effective: "", lastAction: "Continued to next session by House General Laws, Feb 12, 2026", summary: "Would bar leases from requiring internet, cable or other service fees above the landlord's cost, plus common-area maintenance, security, trash, pest and package fees.", bulkImpact: "Would cap bulk internet charges at cost in Virginia.", source: "https://legilist.com/states/virginia/bill/2026/hb-1409" },
+  { id: "va-551222", state: "VA", level: "State", jurisdiction: "Virginia", measure: "Va. Code § 55.1-1222", title: "Tenant access to cable, satellite and other television facilities", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "", lastAction: "In effect", summary: "Landlords must allow tenant access to cable and satellite service.", bulkImpact: "Competing video providers can serve bulk buildings.", source: "https://law.lis.virginia.gov/vacode/title55.1/chapter12/section55.1-1222/" },
+  { id: "va-hb2430", state: "VA", level: "State", jurisdiction: "Virginia", measure: "HB 2430 (2025)", title: "Lease first-page itemization of charges", category: "Fee disclosure / all-in pricing", status: "Enacted", impact: "Low", effective: "2025-07-01", lastAction: "In effect", summary: "First page of the lease must itemize all charges, deposits and move-in fees.", bulkImpact: "Bulk/tech fees must be itemized on lease page one.", source: "https://igniterevs.com/the-ignite-intelligence-engine/multifamily-revenue-laws/" },
+  // Maryland
+  { id: "md-moco-fees", state: "MD", level: "County", jurisdiction: "Montgomery County", measure: "Rent stabilization fee schedule", title: "Internet/cable fee limited to cost among opted-in units", category: "Fee caps / pass-through", status: "In effect (regulation)", impact: "High", effective: "", lastAction: "2026-27 fee schedule", summary: "An internet or cable fee is allowed only as the landlord's actual cost divided by the units voluntarily opting in.", bulkImpact: "Effectively requires opt-in and at-cost pricing for bulk internet in covered Montgomery County units.", source: "https://www.ballardspahr.com/insights/alerts-and-articles/2026/05/spring-2026-dc-md-multifamily-alert-part-one" },
+  { id: "md-hb80", state: "MD", level: "State", jurisdiction: "Maryland", measure: "HB 80 (2026)", title: "Residential lease fee disclosures", category: "Fee disclosure / all-in pricing", status: "Watch", impact: "Low", effective: "", lastAction: "Passed House 94-35 Mar 5, 2026; not among the Oct 1, 2026 enacted laws", summary: "Would require landlords with 4+ units to itemize mandatory and optional fees and bar undisclosed mandatory fees.", bulkImpact: "Likely to return in 2027.", source: "https://legiscan.com/MD/bill/HB80" },
+  // New Jersey
+  { id: "nj-cable-access", state: "NJ", level: "State", jurisdiction: "New Jersey", measure: "N.J.S.A. 48:5A-49", title: "Mandatory cable access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "1982-01-01", lastAction: "In effect", summary: "Requires owners to allow cable operator access (as cited by the FCC).", bulkImpact: "Cable operators can enter bulk buildings.", source: FCC_MA },
+  { id: "nj-a4326", state: "NJ", level: "State", jurisdiction: "New Jersey", measure: "A4326 (2026)", title: "Brokerage fee ban and fee disclosure", category: "Fee disclosure / all-in pricing", status: "Pending", impact: "Low", effective: "", lastAction: "Introduced Feb 19, 2026", summary: "Bars passing brokerage fees to tenants and requires listings and an itemized pre-lease disclosure of all required fees.", bulkImpact: "Mandatory tech fees would need itemized disclosure.", source: "https://pub.njleg.gov/Bills/2026/A4500/4326_I1.HTM" },
+  // Connecticut
+  { id: "ct-cable-access", state: "CT", level: "State", jurisdiction: "Connecticut", measure: "Conn. Gen. Stat. § 16-333a", title: "Mandatory cable access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "1975-01-01", lastAction: "In effect", summary: "Requires owners to allow cable operator access (as cited by the FCC).", bulkImpact: "Cable operators can enter bulk buildings.", source: FCC_MA },
+  { id: "ct-sb3", state: "CT", level: "State", jurisdiction: "Connecticut", measure: "SB 3 (PA 25-44)", title: "All-in pricing", category: "Fee disclosure / all-in pricing", status: "Enacted", impact: "Low", effective: "2026-07-01", lastAction: "In effect", summary: "Businesses, including housing providers, must advertise a total price including mandatory charges.", bulkImpact: "Mandatory tech fees in advertised totals.", source: "https://igniterevs.com/the-ignite-intelligence-engine/multifamily-revenue-laws/" },
+  // District of Columbia
+  { id: "dc-cable-access", state: "DC", level: "State", jurisdiction: "District of Columbia", measure: "D.C. Code § 43-1844.1 (as cited)", title: "Mandatory cable access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "1981-01-01", lastAction: "In effect (citation may have been recodified)", summary: "Requires owners to allow cable operator access (as cited by the FCC).", bulkImpact: "Cable operators can enter bulk buildings.", source: FCC_MA },
+  { id: "dc-fhpa-2026", state: "DC", level: "State", jurisdiction: "District of Columbia", measure: "Fair Housing Practices Amendment (2026)", title: "Bars separate charges for common utilities and habitability services", category: "Fee caps / pass-through", status: "Passed, not yet effective", impact: "Low", effective: "2027-01-01", lastAction: "Enacted July 2, 2026; under congressional review", summary: "Bars fees for services required by the warranty of habitability and separate charges for common utilities.", bulkImpact: "No internet provision; watch for fee limits extending to services.", source: "https://www.kelleydrye.com/viewpoints/blogs/ad-law-access/junk-fees-summer-2026-roundup-part-1-illinois-nyc-and-dc" },
+  // Florida
+  { id: "fl-condo-access", state: "FL", level: "State", jurisdiction: "Florida", measure: "Fla. Stat. § 718.1232", title: "Cable access (condominiums only)", category: "Mandatory access", status: "Enacted", impact: "Low", effective: "1982-01-01", lastAction: "In effect", summary: "Mandatory cable access for condominiums (as cited by the FCC).", bulkImpact: "Condos only.", source: FCC_MA },
+  { id: "fl-hb811", state: "FL", level: "State", jurisdiction: "Florida", measure: "HB 811 / SB 716 (2026)", title: "Prohibited rental fees and surcharges", category: "Fee caps / pass-through", status: "Failed", impact: "Low", effective: "", lastAction: "Died in Civil Justice & Claims Subcommittee, Mar 13, 2026", summary: "Would have barred certain rental fees and surcharges.", bulkImpact: "Watch for refiling.", source: "https://www.flhouse.gov/Sections/Bills/billsdetail.aspx?BillId=83451" },
+  // Mandatory access only
+  { id: "de-access", state: "DE", level: "State", jurisdiction: "Delaware", measure: "26 Del. C. § 613", title: "Mandatory cable access (where utility easements exist)", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "1983-01-01", lastAction: "In effect", summary: "Cable operator access to multiple-unit buildings where utility easements exist (as cited by the FCC).", bulkImpact: "Cable operators can enter bulk buildings.", source: FCC_MA },
+  { id: "ks-access", state: "KS", level: "State", jurisdiction: "Kansas", measure: "K.S.A. § 58-2553", title: "Mandatory cable access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "1983-01-01", lastAction: "In effect", summary: "Requires landlords to allow cable access (as cited by the FCC).", bulkImpact: "Cable operators can enter bulk buildings.", source: FCC_MA },
+  { id: "me-access", state: "ME", level: "State", jurisdiction: "Maine", measure: "14 M.R.S.A. § 6041", title: "Mandatory cable access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "1987-01-01", lastAction: "In effect", summary: "Requires landlords to allow cable access (as cited by the FCC).", bulkImpact: "Cable operators can enter bulk buildings.", source: FCC_MA },
+  { id: "mn-access", state: "MN", level: "State", jurisdiction: "Minnesota", measure: "Minn. Stat. § 238.23", title: "Mandatory cable access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "1983-01-01", lastAction: "In effect", summary: "Requires owners to allow cable access (as cited by the FCC).", bulkImpact: "Cable operators can enter bulk buildings.", source: FCC_MA },
+  { id: "nv-access", state: "NV", level: "State", jurisdiction: "Nevada", measure: "NRS 711.255", title: "Mandatory cable access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "1987-01-01", lastAction: "In effect", summary: "Requires owners to allow cable access (as cited by the FCC).", bulkImpact: "Cable operators can enter bulk buildings.", source: FCC_MA },
+  { id: "ri-access", state: "RI", level: "State", jurisdiction: "Rhode Island", measure: "R.I. Gen. Laws § 39-19-10", title: "Mandatory cable access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "1993-01-01", lastAction: "In effect", summary: "Requires owners to allow cable access (as cited by the FCC).", bulkImpact: "Cable operators can enter bulk buildings.", source: FCC_MA },
+  { id: "wv-access", state: "WV", level: "State", jurisdiction: "West Virginia", measure: "W. Va. Code § 5-18A-1", title: "Mandatory cable access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "1995-01-01", lastAction: "In effect", summary: "Requires owners to allow cable access (as cited by the FCC).", bulkImpact: "Cable operators can enter bulk buildings.", source: FCC_MA },
+  { id: "wi-access", state: "WI", level: "State", jurisdiction: "Wisconsin", measure: "Wis. Stat. § 66.0421", title: "Mandatory cable access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "2001-01-01", lastAction: "In effect", summary: "Requires owners to allow cable access (as cited by the FCC).", bulkImpact: "Cable operators can enter bulk buildings.", source: FCC_MA },
+  { id: "oh-access", state: "OH", level: "State", jurisdiction: "Ohio", measure: "Ohio Rev. Code §§ 4931.04-.05", title: "Telecommunications provider access", category: "Mandatory access", status: "Enacted", impact: "Medium", effective: "", lastAction: "In effect", summary: "Ohio mandatory access provisions for telecommunications providers.", bulkImpact: "Competing providers can seek access to bulk buildings.", source: "https://www.keglerbrown.com/publications/mdus-vs-the-fcc-exclusivity-service-agreements-with-cable-and-internet-providers" },
+  // Federal
+  { id: "us-ftc-anprm", state: "US", level: "Federal", jurisdiction: "Federal Trade Commission", measure: "Rental housing fees ANPRM", title: "Unfair or deceptive rental housing fee practices", category: "Bulk billing / opt-out", status: "Pending", impact: "High", effective: "", lastAction: "Comment period closed Apr 13, 2026 (1,500+ comments); 27 state AGs support a federal rule", summary: "FTC advance notice on hidden and bundled rental fees, including designated or mandatory cable and internet services tenants may not use.", bulkImpact: "Could revive a national bulk billing restriction (the FCC's 2024 proposal was withdrawn Jan 2025).", source: "https://broadbandbreakfast.com/ftc-moves-to-crack-down-on-hidden-unfair-rental-fees-and-perhaps-bulk-billing/" },
+];
+
+// A state's highlight tier: "active" when it has a live (not failed) measure
+// other than a plain mandatory-access statute; otherwise "access".
+function legisTierFor(items) {
+  if (!items || !items.length) return null;
+  return items.some((x) => x.category !== "Mandatory access" && x.status !== "Failed") ? "active" : "access";
+}
+const LEGIS_STATUS_STYLE = { "Enacted": "#2f9e61", "In effect (regulation)": "#2f9e61", "Passed, not yet effective": "#3d8bd9", "Pending": "#d98b2b", "Proposed rule": "#d98b2b", "Carried over": "#b98a3b", "Failed": "#7a8494", "Watch": "#7a8494" };
+const LEGIS_IMPACT_STYLE = { High: "#e0663f", Medium: "#d9a12b", Low: "#7a8494" };
+const safeHttpUrl = (u) => (/^https?:\/\//i.test(String(u || "").trim()) ? String(u).trim() : null);
+
+function LegislationItemEditor({ item, onSave, onCancel, saving }) {
+  const [d, setD] = useState(item);
+  const set = (k) => (e) => setD((x) => ({ ...x, [k]: e.target.value }));
+  const field = (label, k, wide) => (
+    <label className={`lg-f${wide ? " wide" : ""}`}><span>{label}</span><input value={d[k] || ""} onChange={set(k)} /></label>
+  );
+  const select = (label, k, opts) => (
+    <label className="lg-f"><span>{label}</span><select value={d[k] || ""} onChange={set(k)}>{opts.map((o) => <option key={o} value={o}>{o}</option>)}</select></label>
+  );
+  const area = (label, k) => (
+    <label className="lg-f wide"><span>{label}</span><textarea rows={3} value={d[k] || ""} onChange={set(k)} /></label>
+  );
+  return (
+    <div className="lg-edit">
+      <div className="lg-grid">
+        {field("Measure (bill / ordinance / rule)", "measure")}
+        {field("Jurisdiction", "jurisdiction")}
+        {select("Level", "level", LEGIS_LEVELS)}
+        {select("Category", "category", LEGIS_CATEGORIES)}
+        {select("Status", "status", LEGIS_STATUSES)}
+        {select("Impact on bulk programs", "impact", LEGIS_IMPACTS)}
+        <label className="lg-f"><span>Effective date</span><input type="date" value={d.effective || ""} onChange={set("effective")} /></label>
+        {field("Last action", "lastAction")}
+        {field("Title", "title", true)}
+        {area("Summary", "summary")}
+        {area("Impact on bulk programs (notes)", "bulkImpact")}
+        {field("Source link", "source", true)}
+      </div>
+      <div className="lg-actions">
+        <button className="btn-primary" disabled={saving || !String(d.measure || "").trim()} onClick={() => onSave(d)}>{saving ? "Saving…" : "Save"}</button>
+        <button className="btn-ghost" onClick={onCancel} disabled={saving}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function LegislationPanel({ stateCode, items, onSaveItems, userEmail }) {
+  const [editing, setEditing] = useState(null); // item id, or "new"
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+  const mine = items.filter((x) => x.state === stateCode);
+  const groups = LEGIS_LEVELS.map((lv) => [lv, mine.filter((x) => (x.level || "State") === lv)]).filter(([, xs]) => xs.length);
+  const order = { High: 0, Medium: 1, Low: 2 };
+  const save = async (next) => {
+    setSaving(true); setErr(null);
+    try { await onSaveItems(next); setEditing(null); } catch (e) { setErr(e.message || String(e)); }
+    setSaving(false);
+  };
+  const stamp = (x) => ({ ...x, updatedBy: userEmail || "unknown", updatedAt: new Date().toISOString() });
+  const upsertItem = (d) => save(items.some((x) => x.id === d.id) ? items.map((x) => (x.id === d.id ? stamp(d) : x)) : [...items, stamp(d)]);
+  const removeItem = (id) => { if (window.confirm("Remove this measure from the tracker?")) save(items.filter((x) => x.id !== id)); };
+  const blank = { id: `${stateCode.toLowerCase()}-${Date.now()}`, state: stateCode, level: "State", jurisdiction: US_STATE_NAMES[stateCode] || stateCode, measure: "", title: "", category: "Bulk billing / opt-out", status: "Pending", impact: "Medium", effective: "", lastAction: "", summary: "", bulkImpact: "", source: "" };
+  return (
+    <div className="lg-panel">
+      <div className="lg-head">
+        <h3>Legislation &amp; regulation</h3>
+        <button className="btn-ghost" onClick={() => setEditing("new")} disabled={!!editing}>+ Add measure</button>
+      </div>
+      {err && <div className="lg-err">Couldn't save: {err}</div>}
+      {editing === "new" && <LegislationItemEditor item={blank} saving={saving} onCancel={() => setEditing(null)} onSave={upsertItem} />}
+      {!mine.length && editing !== "new" && <div className="lg-empty">Nothing tracked for {US_STATE_NAMES[stateCode] || stateCode} yet.</div>}
+      {groups.map(([lv, xs]) => (
+        <div key={lv} className="lg-group">
+          <div className="lg-group-h">{lv === "State" ? "Statewide" : lv === "City" ? "City" : lv === "County" ? "County" : "Federal"}</div>
+          {[...xs].sort((a, b) => (order[a.impact] ?? 3) - (order[b.impact] ?? 3)).map((x) => editing === x.id ? (
+            <LegislationItemEditor key={x.id} item={x} saving={saving} onCancel={() => setEditing(null)} onSave={upsertItem} />
+          ) : (
+            <div key={x.id} className="lg-card">
+              <div className="lg-card-top">
+                <b>{x.measure}</b>{x.level !== "State" && <span className="lg-jur">{x.jurisdiction}</span>}
+                <span className="lg-chip" style={{ borderColor: LEGIS_STATUS_STYLE[x.status] || "#7a8494", color: LEGIS_STATUS_STYLE[x.status] || "#7a8494" }}>{x.status}</span>
+                <span className="lg-chip" style={{ borderColor: LEGIS_IMPACT_STYLE[x.impact] || "#7a8494", color: LEGIS_IMPACT_STYLE[x.impact] || "#7a8494" }}>{x.impact} impact</span>
+                <span className="lg-cat">{x.category}</span>
+                <span className="lg-sp" />
+                <button className="link" onClick={() => setEditing(x.id)} disabled={!!editing}>Edit</button>
+                <button className="link" onClick={() => removeItem(x.id)} disabled={!!editing}>Remove</button>
+              </div>
+              {x.title && <div className="lg-title">{x.title}</div>}
+              {x.summary && <div className="lg-sum">{x.summary}</div>}
+              {x.bulkImpact && <div className="lg-imp"><span>Bulk programs:</span> {x.bulkImpact}</div>}
+              <div className="lg-meta">
+                {x.effective && <span>Effective {fmtDate(x.effective)}</span>}
+                {x.lastAction && <span>{x.lastAction}</span>}
+                {safeHttpUrl(x.source) && <a href={safeHttpUrl(x.source)} target="_blank" rel="noopener noreferrer">Source</a>}
+                {x.updatedAt && <span className="lg-upd">Edited {fmtDate(x.updatedAt.slice(0, 10))}{x.updatedBy ? ` by ${x.updatedBy}` : ""}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ClientMapView({ properties, onOpenProperty, legislation, onSaveLegislation, userEmail }) {
   const W = 975, H = 610;
   const [atlas, setAtlas] = useState(null);
   const [atlasError, setAtlasError] = useState(false);
@@ -7964,7 +8200,11 @@ function ClientMapView({ properties, onOpenProperty }) {
   const [hidden, setHidden] = useState(() => new Set());
   const [clientFilter, setClientFilter] = useState("");
   const [tip, setTip] = useState(null);
+  const [showLegis, setShowLegis] = useState(true);
+  const [showPins, setShowPins] = useState(true);
+  const [selState, setSelState] = useState(null); // postal code of the state being viewed
   const wrapRef = React.useRef(null);
+  const legisItems = legislation || LEGIS_SEED;
 
   useEffect(() => { loadUsAtlas().then(setAtlas).catch(() => setAtlasError(true)); }, []);
 
@@ -7995,14 +8235,26 @@ function ClientMapView({ properties, onOpenProperty }) {
     return () => { cancelled = true; };
   }, [active]);
 
+  // Legislation grouped by state; tier drives the overlay colour.
+  const legisByState = useMemo(() => {
+    const m = {};
+    legisItems.forEach((x) => { if (x.state && x.state !== "US") (m[x.state] = m[x.state] || []).push(x); });
+    return m;
+  }, [legisItems]);
+  const federalItems = legisItems.filter((x) => x.state === "US");
+
+  // National view, or the selected state fitted to the frame.
   const geo = useMemo(() => {
     if (!atlas || !window.d3 || !window.topojson) return null;
-    const proj = d3.geoAlbersUsa().scale(1300).translate([W / 2, H / 2]);
+    const features = topojson.feature(atlas, atlas.objects.states).features.map((f) => ({ f, code: US_STATE_BY_NAME[String((f.properties && f.properties.name) || "").toLowerCase()] || null }));
+    const sel = selState ? features.find((x) => x.code === selState) : null;
+    const proj = d3.geoAlbersUsa();
+    if (sel) proj.fitExtent([[40, 30], [W - 40, H - 30]], sel.f); else proj.scale(1300).translate([W / 2, H / 2]);
     const path = d3.geoPath(proj);
-    const states = topojson.feature(atlas, atlas.objects.states).features.map((f) => path(f));
-    const nation = path(topojson.mesh(atlas, atlas.objects.states, (a, b) => a === b));
-    return { proj, states, nation };
-  }, [atlas]);
+    const states = features.map((x) => ({ code: x.code, d: path(x.f), f: x.f }));
+    const nation = sel ? null : path(topojson.mesh(atlas, atlas.objects.states, (a, b) => a === b));
+    return { proj, states, nation, sel };
+  }, [atlas, selState]);
 
   const clients = useMemo(() => [...new Set(active.map((r) => r.client))].sort(), [active]);
   const phaseCounts = useMemo(() => {
@@ -8019,86 +8271,157 @@ function ClientMapView({ properties, onOpenProperty }) {
     const placed = [], unmapped = [];
     active.forEach((r) => {
       const loc = locateProperty(r.a, zipCache);
-      const xy = loc && geo.proj([loc.ll[1], loc.ll[0]]);
+      if (!loc) { unmapped.push(r); return; }
+      const lonlat = [loc.ll[1], loc.ll[0]];
+      // In a state view, keep only that state's properties.
+      if (geo.sel) {
+        const st = String(r.a.State || "").trim().toUpperCase();
+        if (st ? st !== selState : !d3.geoContains(geo.sel.f, lonlat)) return;
+      }
+      const xy = geo.proj(lonlat);
       if (xy) placed.push({ ...r, x: xy[0], y: xy[1], approx: !loc.exact }); else unmapped.push(r);
     });
     // Fan out pins that land on top of each other (same zip / same city).
     placed.sort((a, b) => a.code.localeCompare(b.code));
+    const near = geo.sel ? 16 : 8;
     const groups = [];
     placed.forEach((m) => {
-      const g = groups.find((g) => Math.hypot(g.x - m.x, g.y - m.y) < 12);
+      const g = groups.find((g) => Math.hypot(g.x - m.x, g.y - m.y) < near);
       if (g) g.items.push(m); else groups.push({ x: m.x, y: m.y, items: [m] });
     });
     groups.forEach((g) => {
       const n = g.items.length; if (n < 2) return;
-      const rad = 7 + n * 1.6;
+      const rad = geo.sel ? 10 + n * 2.4 : 5 + n * 1.1;
       g.items.forEach((m, i) => { const t = (i / n) * 2 * Math.PI - Math.PI / 2; m.x = g.x + rad * Math.cos(t); m.y = g.y + rad * Math.sin(t); });
     });
     return { pins: placed, unmapped };
-  }, [geo, active, zipCache]);
+  }, [geo, active, zipCache, selState]);
 
   const shown = (r) => !hidden.has(r.phase) && (!clientFilter || r.client === clientFilter);
   const shownCount = active.filter(shown).length;
+  const statePinCount = selState ? pins.filter(shown).length : 0;
 
   const showTip = (e, r) => {
     const box = wrapRef.current.getBoundingClientRect();
     setTip({ r, x: e.clientX - box.left, y: e.clientY - box.top, w: box.width, h: box.height });
   };
+  const showStateTip = (e, code) => {
+    if (selState || !code) return;
+    const box = wrapRef.current.getBoundingClientRect();
+    setTip({ state: code, x: e.clientX - box.left, y: e.clientY - box.top, w: box.width, h: box.height });
+  };
   const toggle = (ph) => setHidden((s) => { const n = new Set(s); n.has(ph) ? n.delete(ph) : n.add(ph); return n; });
+  const openState = (code) => { if (code) { setSelState(code); setTip(null); } };
+
+  const trackedStates = Object.keys(legisByState).sort((a, b) => (US_STATE_NAMES[a] || a).localeCompare(US_STATE_NAMES[b] || b));
+  const activeStates = trackedStates.filter((c) => legisTierFor(legisByState[c]) === "active");
+  const accessStates = trackedStates.filter((c) => legisTierFor(legisByState[c]) === "access");
+  const pinR = geo && geo.sel ? 8 : 4.5;
 
   return (
     <div className="cmap">
       <div className="cmap-head">
         <div>
-          <h2>Client Map</h2>
-          <div className="cmap-sub">{shownCount} active advisory {shownCount === 1 ? "property" : "properties"}{clientFilter ? ` · ${clientFilter}` : ""}</div>
+          <h2>{selState ? <><button className="link cmap-back" onClick={() => { setSelState(null); setTip(null); }}>← US map</button> {US_STATE_NAMES[selState] || selState}</> : "Client Map"}</h2>
+          <div className="cmap-sub">
+            {selState
+              ? `${statePinCount} active advisory ${statePinCount === 1 ? "property" : "properties"} in ${US_STATE_NAMES[selState] || selState} · ${(legisByState[selState] || []).length} tracked ${(legisByState[selState] || []).length === 1 ? "measure" : "measures"}`
+              : `${shownCount} active advisory ${shownCount === 1 ? "property" : "properties"}${clientFilter ? ` · ${clientFilter}` : ""} · ${activeStates.length} states with bulk-program legislation`}
+          </div>
         </div>
-        <select className="cmap-select" value={clientFilter} onChange={(e) => setClientFilter(e.target.value)}>
-          <option value="">All clients</option>
-          {clients.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
+        <div className="cmap-tools">
+          <label className="cmap-toggle"><input type="checkbox" checked={showPins} onChange={(e) => setShowPins(e.target.checked)} /> Client properties</label>
+          <label className="cmap-toggle"><input type="checkbox" checked={showLegis} onChange={(e) => setShowLegis(e.target.checked)} /> Legislation</label>
+          <select className="cmap-select" value={clientFilter} onChange={(e) => setClientFilter(e.target.value)}>
+            <option value="">All clients</option>
+            {clients.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
       </div>
 
       <div className="cmap-legend">
-        {phaseCounts.map(([ph, n]) => (
+        {showPins && phaseCounts.map(([ph, n]) => (
           <button key={ph} className={hidden.has(ph) ? "off" : ""} onClick={() => toggle(ph)} title={hidden.has(ph) ? "Show" : "Hide"}>
             <span className="sw" style={{ background: colorForPhaseLabel(ph) }} />{ph}<span className="n">{n}</span>
           </button>
         ))}
+        {showLegis && !selState && <>
+          <span className="cmap-lg-key"><span className="box active" />Bulk-program legislation</span>
+          <span className="cmap-lg-key"><span className="box access" />Mandatory access only</span>
+        </>}
       </div>
 
-      <div className="cmap-frame" ref={wrapRef} onMouseLeave={() => setTip(null)}>
-        {!geo && <div className="cmap-msg">{atlasError ? "Couldn't load the map outline — check your connection and refresh." : "Loading map…"}</div>}
-        {geo && (
-          <svg viewBox={`0 0 ${W} ${H}`} className="cmap-svg">
-            <g>{geo.states.map((d, i) => <path key={i} d={d} className="cmap-state" />)}</g>
-            <path d={geo.nation} className="cmap-nation" />
-            <g>
-              {pins.filter(shown).map((r) => (
-                <g key={r.code} transform={`translate(${r.x},${r.y})`} className="cmap-pin"
-                   onMouseMove={(e) => showTip(e, r)} onMouseLeave={() => setTip(null)}
-                   onClick={() => onOpenProperty(r.p)}>
-                  <circle r="11" fill="transparent" />
-                  <circle r="6.5" className="dot" fill={r.color} strokeDasharray={r.approx ? "2 2" : undefined} />
-                </g>
-              ))}
-            </g>
-          </svg>
-        )}
-        {tip && (
-          <div className="cmap-tip" style={{
-            left: tip.x + 250 > tip.w ? tip.x - 14 : tip.x + 14,
-            top: tip.y + 100 > tip.h ? tip.y - 14 : tip.y + 14,
-            transform: `${tip.x + 250 > tip.w ? "translateX(-100%)" : ""} ${tip.y + 100 > tip.h ? "translateY(-100%)" : ""}`.trim() || "none"
-          }}>
-            <b>{tip.r.name}</b>
-            <div className="ph"><i style={{ background: tip.r.color }} />{tip.r.phase}</div>
-            <div className="cl">{tip.r.client}</div>
-            {tip.r.approx && <div className="ap">Approximate — no zip on file</div>}
-          </div>
+      {showLegis && !selState && (
+        <div className="cmap-states">
+          {activeStates.map((c) => <button key={c} className="active" onClick={() => openState(c)} title={`${legisByState[c].length} tracked`}>{US_STATE_NAMES[c] || c}</button>)}
+          {accessStates.map((c) => <button key={c} className="access" onClick={() => openState(c)} title="Mandatory access statute">{US_STATE_NAMES[c] || c}</button>)}
+        </div>
+      )}
+
+      <div className={`cmap-body${selState ? " split" : ""}`}>
+        <div className="cmap-frame" ref={wrapRef} onMouseLeave={() => setTip(null)}>
+          {!geo && <div className="cmap-msg">{atlasError ? "Couldn't load the map outline — check your connection and refresh." : "Loading map…"}</div>}
+          {geo && (
+            <svg viewBox={`0 0 ${W} ${H}`} className="cmap-svg">
+              <g>{geo.states.map((s, i) => {
+                const tier = showLegis ? legisTierFor(legisByState[s.code]) : null;
+                const isSel = geo.sel && s.code === selState;
+                return (
+                  <path key={i} d={s.d}
+                    className={`cmap-state${tier ? ` lg-${tier}` : ""}${isSel ? " sel" : ""}${geo.sel && !isSel ? " dim" : ""}`}
+                    onClick={() => { if (!geo.sel) openState(s.code); }}
+                    onMouseMove={(e) => showStateTip(e, s.code)}
+                    style={{ cursor: geo.sel ? "default" : "pointer" }} />
+                );
+              })}</g>
+              {geo.nation && <path d={geo.nation} className="cmap-nation" />}
+              {showPins && <g>
+                {pins.filter(shown).map((r) => (
+                  <g key={r.code} transform={`translate(${r.x},${r.y})`} className={`cmap-pin${geo.sel ? " big" : ""}`}
+                     onMouseMove={(e) => { e.stopPropagation(); showTip(e, r); }} onMouseLeave={() => setTip(null)}
+                     onClick={(e) => { e.stopPropagation(); onOpenProperty(r.p); }}>
+                    <circle r={pinR + 4} fill="transparent" />
+                    <circle r={pinR} className="dot" fill={r.color} strokeDasharray={r.approx ? "2 2" : undefined} />
+                    {geo.sel && <text y={-pinR - 5} className="cmap-pin-label">{r.code}</text>}
+                  </g>
+                ))}
+              </g>}
+            </svg>
+          )}
+          {tip && (
+            <div className="cmap-tip" style={{
+              left: tip.x + 250 > tip.w ? tip.x - 14 : tip.x + 14,
+              top: tip.y + 100 > tip.h ? tip.y - 14 : tip.y + 14,
+              transform: `${tip.x + 250 > tip.w ? "translateX(-100%)" : ""} ${tip.y + 100 > tip.h ? "translateY(-100%)" : ""}`.trim() || "none"
+            }}>
+              {tip.r ? <>
+                <b>{tip.r.name}</b>
+                <div className="ph"><i style={{ background: tip.r.color }} />{tip.r.phase}</div>
+                <div className="cl">{tip.r.client}</div>
+                {tip.r.approx && <div className="ap">Approximate — no zip on file</div>}
+              </> : <>
+                <b>{US_STATE_NAMES[tip.state] || tip.state}</b>
+                {(legisByState[tip.state] || []).length
+                  ? <div className="cl">{legisByState[tip.state].length} tracked {legisByState[tip.state].length === 1 ? "measure" : "measures"}: {legisByState[tip.state].slice(0, 3).map((x) => x.measure).join(", ")}{legisByState[tip.state].length > 3 ? "…" : ""}</div>
+                  : <div className="cl">No tracked legislation</div>}
+                <div className="ap">Click to zoom in</div>
+              </>}
+            </div>
+          )}
+        </div>
+        {selState && (
+          <LegislationPanel stateCode={selState} items={legisItems} onSaveItems={onSaveLegislation} userEmail={userEmail} />
         )}
       </div>
-      {unmapped.length > 0 && (
+
+      {!selState && showLegis && federalItems.length > 0 && (
+        <div className="cmap-fed">
+          <b>Federal:</b> {federalItems.map((x, i) => (
+            <span key={x.id}>{i > 0 && " · "}{x.measure} ({x.status}){x.lastAction ? ` — ${x.lastAction}` : ""}{safeHttpUrl(x.source) && <> <a href={safeHttpUrl(x.source)} target="_blank" rel="noopener noreferrer">Source</a></>}</span>
+          ))}
+        </div>
+      )}
+      {unmapped.length > 0 && !selState && (
         <div className="cmap-foot">Not on the map (no state or zip): {unmapped.map((u, i) => (
           <span key={u.code}>{i > 0 && ", "}<a onClick={() => onOpenProperty(u.p)}>{u.name}</a></span>
         ))}</div>
@@ -8281,6 +8604,7 @@ function App() {
   const [clientNotes, setClientNotes] = useState([]);
   // Revenue Tracker billing import (app_state "revenueTrackerImport").
   const [billingImport, setBillingImport] = useState(null);
+  const [legislation, setLegislation] = useState(null); // null = use the built-in research baseline
 
   // Real, genuinely shared data — backed by Supabase, not tied to Claude's
   // artifact runtime the way the earlier window.storage version was. This
@@ -8405,6 +8729,8 @@ function App() {
       if (clientNotesData) setClientNotes(clientNotesData);
       const { data: billingRow } = await supabaseClient.from("app_state").select("value").eq("key", RT_STATE_KEY).maybeSingle();
       if (billingRow && billingRow.value) setBillingImport(billingRow.value);
+      const { data: legisRow } = await supabaseClient.from("app_state").select("value").eq("key", LEGIS_STATE_KEY).maybeSingle();
+      if (legisRow && legisRow.value && Array.isArray(legisRow.value.items)) setLegislation(legisRow.value.items);
       loadChangeLog();
       setDataSyncStatus("shared");
 
@@ -8526,6 +8852,17 @@ function App() {
     const { data: check } = await supabaseClient.from("app_state").select("value").eq("key", OWNER_STATE_KEY).maybeSingle();
     if (!check || !check.value || JSON.stringify(check.value[key]) !== JSON.stringify(record)) throw new Error("the save didn't stick — you may have read-only access");
     setPortfolios(check.value);
+  };
+
+  // Saves the legislation tracker (the whole list), then reads it back to confirm.
+  const saveLegislation = async (items) => {
+    if (!supabaseClient) throw new Error("Not connected to the shared database.");
+    const value = { items, updated_at: new Date().toISOString(), updated_by: session && session.user ? session.user.email : null };
+    const { error } = await supabaseClient.from("app_state").upsert({ key: LEGIS_STATE_KEY, value });
+    if (error) throw new Error(error.message);
+    const { data: check } = await supabaseClient.from("app_state").select("value").eq("key", LEGIS_STATE_KEY).maybeSingle();
+    if (!check || !check.value || check.value.updated_at !== value.updated_at) throw new Error("the save didn't stick — you may have read-only access");
+    setLegislation(check.value.items);
   };
 
   // Saves a Revenue Tracker import, replacing the previous one.
@@ -9177,7 +9514,7 @@ function App() {
         <AdvisoryContractsView properties={properties} onOpenProperty={(p) => openProgram(p)} supabaseClient={supabaseClient} billingImport={billingImport} />
       )}
       {view === "map" && (
-        <ClientMapView properties={properties} onOpenProperty={(p) => openProgram(p)} />
+        <ClientMapView properties={properties} onOpenProperty={(p) => openProgram(p)} legislation={legislation} onSaveLegislation={saveLegislation} userEmail={session && session.user ? session.user.email : null} />
       )}
       {view === "changelog" && (
         <ChangeLogView
