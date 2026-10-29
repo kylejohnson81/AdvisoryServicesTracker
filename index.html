@@ -5589,23 +5589,6 @@ function excelCellDate(v) {
   return null;
 }
 
-function parseDueDiligenceSheet(workbook) {
-  const ws = workbook.Sheets["Due Diligence"];
-  if (!ws) throw new Error('No "Due Diligence" sheet found in this file');
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, range: 6, defval: null });
-  const properties = [];
-  for (const r of rows) {
-    if (!r[1] || !r[12]) continue;
-    const [client, name, ptype, office, units, address, city, state, zip_, region, cmEmail, projectType, oppStart, status, advServices, nextSteps] = r;
-    properties.push({
-      name: String(name).trim(), client, propertyType: ptype, office, units,
-      address, city, state, zip: zip_, region, cmEmail, projectType,
-      oppStart: SMART_IMPORT_OPPORTUNITY_START_OVERWRITE, status, advisoryServices: advServices, nextSteps,
-    });
-  }
-  return properties;
-}
-
 // The Excel Master Data tab is the more recent source of truth, so
 // every Attributes refresh also upserts it into Supabase
 // master_properties — combining Master Data's own fields (Yardi Code,
@@ -6802,8 +6785,9 @@ function acOneTimeFees(p) {
 
 /* ---------------------------------------------------------
    IMPORT / EXPORT — one menu for every file in or out:
-   Master Export, Refresh Contract Data (Ironclad) and Refresh
-   Master Attributes (master tracker workbook, Due Diligence tab).
+   Master Export, Refresh Master Data, Refresh Contract Data
+   (Ironclad) and Refresh Billing. New assets and master pairing
+   come through the daily digest, not a file import.
    Imports always show a preview first; nothing changes until
    Apply. Every applied change is written to the Change Log.
 --------------------------------------------------------- */
@@ -6811,12 +6795,6 @@ function acOneTimeFees(p) {
 const IE_ADDR_PAIRS = [["northeast","ne"],["northwest","nw"],["southeast","se"],["southwest","sw"],["north","n"],["south","s"],["east","e"],["west","w"],
   ["street","st"],["avenue","ave"],["av","ave"],["lane","ln"],["road","rd"],["drive","dr"],["boulevard","blvd"],["court","ct"],["place","pl"],["parkway","pkwy"],
   ["highway","hwy"],["circle","cir"],["terrace","ter"],["square","sq"],["trail","trl"],["way","way"]];
-function ieNormAddress(v) {
-  let s = " " + String(v || "").toLowerCase() + " ";
-  s = s.replace(/[.,#]/g, " ");
-  IE_ADDR_PAIRS.forEach(([a, b]) => { s = s.replace(new RegExp("\\b" + a + "\\b", "g"), b); });
-  return s.replace(/[^a-z0-9]/g, "");
-}
 const ieZip = (z) => {
   if (z === null || z === undefined || z === "") return "";
   if (typeof z === "number") return String(Math.round(z)).padStart(5, "0");
@@ -6851,67 +6829,6 @@ const ieTrackerByName = (properties) => {
   properties.forEach((p) => previousNamesOf(p).forEach((n) => { const k = ieNameKey(n); if (!m[k]) m[k] = p; }));
   return m;
 };
-
-// ---- Refresh Master Attributes: build the preview ----
-const IE_MASTER_MAP = [["Yardi Code", "yardi_code"], ["Address", "address"], ["City", "city"], ["State", "state"], ["Zip", "zip"], ["Units", "units"],
-  ["Region", "region"], ["Office", "office"], ["RPM", "rpm"], ["RPM Email", "rpm_email"], ["CM", "cm"], ["CM Email", "cm_email"]];
-function ieBuildAttributesPreview(ddRows, master, properties) {
-  const byAddr = {};
-  master.forEach((m) => { const k = ieNormAddress(m.address); if (k) (byAddr[k] = byAddr[k] || []).push(m); });
-  const activeYardi = new Set(master.map((m) => ieStr(m.yardi_code).toLowerCase()));
-  const tracker = ieTrackerByName(properties);
-  const changes = []; const creates = []; const flags = []; const seen = new Set();
-  const matchMaster = (dd) => {
-    const cands = (byAddr[ieNormAddress(dd.address)] || []).filter((m) => ieSame(m.state, dd.state)
-      && (ieZip(m.zip).slice(0, 5) === ieZip(dd.zip).slice(0, 5) || (!ieZip(dd.zip) && ieSame(m.city, dd.city))));
-    return cands;
-  };
-  ddRows.forEach((dd) => {
-    const key = ieNameKey(dd.name);
-    if (seen.has(key)) return; seen.add(key);
-    const p = tracker[key];
-    const hits = ieNormAddress(dd.address) && dd.state ? matchMaster(dd) : [];
-    if (hits.length > 1) flags.push(`"${dd.name}": ${hits.length} master records share this address (${hits.map((h) => h.yardi_code).join(", ")}) — DD tab values used; link it from the Change Log.`);
-    const m = hits.length === 1 ? hits[0] : null;
-    if (p) {
-      if (computeStatus(p) === "Closed") { flags.push(`"${p.name}" (${p.code}) is Closed — skipped.`); return; }
-      const a = p.program.attributes || {};
-      const linked = a["Master Status"] === "Linked" && activeYardi.has(ieStr(a["Yardi Code"]).toLowerCase());
-      const fields = [];
-      const put = (field, val, reason) => {
-        if (val === null || val === undefined || ieStr(val) === "") return;
-        const v = field === "Units" ? Number(val) : field === "Zip" ? ieZip(val) : val;
-        if (!ieSame(a[field], v)) fields.push({ field, oldv: a[field] ?? null, newv: v, reason });
-      };
-      if (m) {
-        const r = "Refresh Master Attributes — master supersedes the DD tab (address match)";
-        IE_MASTER_MAP.forEach(([f, col]) => put(f, m[col], r));
-        put("Master Status", "Linked", r); put("Source of Record", "Master", r);
-      } else if (linked) {
-        return; // already linked to a current master record — master stays the source; the DD tab doesn't override it
-      } else {
-        const r = "Refresh Master Attributes — from the DD tab (not in master)";
-        [["Units", dd.units], ["Address", dd.address], ["City", dd.city], ["State", dd.state], ["Zip", dd.zip], ["Region", dd.region], ["Office", dd.office], ["CM Email", dd.cmEmail]]
-          .forEach(([f, v]) => put(f, v, r));
-        if (dd.projectType && /new/i.test(String(dd.projectType))) put("Project Type", "New Construction", r);
-        put("Master Status", "Not in master", r); put("Source of Record", "DD import", r);
-        if (dd.client && !ieSame(a.Client, dd.client)) fields.push({ field: "Client", oldv: a.Client ?? null, newv: ieStr(dd.client), reason: r, isClient: true });
-      }
-      if (fields.length) changes.push({ id: p.id, code: p.code, name: p.name, fields, viaMaster: !!m });
-    } else {
-      const attrs = { Client: ieStr(dd.client) || (m && m.client) || "—", Region: (m && m.region) || ieStr(dd.region) || "National",
-        "Project Type": dd.projectType && /new/i.test(String(dd.projectType)) ? "New Construction" : "Retrofit" };
-      if (m) { IE_MASTER_MAP.forEach(([f, col]) => { if (m[col] !== null && m[col] !== undefined && m[col] !== "") attrs[f] = col === "units" ? Number(m[col]) : m[col]; }); attrs["Master Status"] = "Linked"; attrs["Source of Record"] = "Master"; }
-      else {
-        [["Units", dd.units], ["Address", dd.address], ["City", dd.city], ["State", dd.state], ["Zip", ieZip(dd.zip)], ["Office", dd.office], ["CM Email", dd.cmEmail]]
-          .forEach(([f, v]) => { if (ieStr(v)) attrs[f] = f === "Units" ? Number(v) : v; });
-        attrs["Master Status"] = "Not in master"; attrs["Source of Record"] = "DD import";
-      }
-      creates.push({ name: ieStr(dd.name), attrs, prospectStart: dd.oppStart || null, viaMaster: !!m });
-    }
-  });
-  return { changes, creates, flags };
-}
 
 // ---- Refresh Contract Data: turn the existing builder's output into a field-level preview ----
 function ieBuildContractsPreview(result, properties) {
@@ -7049,17 +6966,16 @@ async function ieApplyMasterData(supabaseClient, preview, fileName) {
 
 function ImportExportModal({ onClose, properties, setProperties, supabaseClient, onExport, userEmail, onLogged, billingImport, onSaveBillingImport }) {
   const [revenueOpen, setRevenueOpen] = useState(false);
-  const [mode, setMode] = useState(null); // null | "contracts" | "attributes"
+  const [mode, setMode] = useState(null); // null | "master" | "contracts"
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [preview, setPreview] = useState(null);
   const [skip, setSkip] = useState({});        // property id -> true to leave out
   const [createOn, setCreateOn] = useState({}); // create index -> true to create
-  const [includeClient, setIncludeClient] = useState(false);
   const [done, setDone] = useState(null);
   const fileRef = React.useRef(null);
 
-  const reset = (m) => { setMode(m); setPreview(null); setErr(null); setDone(null); setSkip({}); setCreateOn({}); setIncludeClient(false); };
+  const reset = (m) => { setMode(m); setPreview(null); setErr(null); setDone(null); setSkip({}); setCreateOn({}); };
 
   const onFile = async (e) => {
     const file = e.target.files && e.target.files[0];
@@ -7073,7 +6989,7 @@ function ImportExportModal({ onClose, properties, setProperties, supabaseClient,
         if (!parsed.records.length) throw new Error(`The "${parsed.sheetName}" tab has no rows with a Yardi Code.`);
         const current = await ieFetchAllMaster(supabaseClient);
         setPreview({ fileName: file.name, ...ieBuildMasterDataPreview(parsed, current, properties) });
-      } else if (mode === "contracts") {
+      } else {
         const parsed = parseIroncladAllStatusSheet(wb);
         if (!Object.keys(parsed.selections).length && !Object.keys(parsed.executed).length && !Object.keys(parsed.draftedOnly).length)
           throw new Error("No Advisory Services agreements found. Is this the Ironclad All Status export (Record Type, Record Name, Contract Status, Formal RFP… columns)?");
@@ -7086,11 +7002,6 @@ function ImportExportModal({ onClose, properties, setProperties, supabaseClient,
         } catch (x) { /* master lookup is only used to enrich new properties */ }
         const result = buildContractsRefreshResult(parsed.selections, parsed.executed, parsed.draftedOnly, properties, masterByName);
         setPreview({ fileName: file.name, ...ieBuildContractsPreview(result, properties) });
-      } else {
-        const ddRows = parseDueDiligenceSheet(wb);
-        if (!ddRows.length) throw new Error('The "Due Diligence" tab has no property rows.');
-        const master = await ieFetchActiveMaster(supabaseClient);
-        setPreview({ fileName: file.name, ddCount: ddRows.length, masterCount: master.length, ...ieBuildAttributesPreview(ddRows, master, properties) });
       }
     } catch (x) { setErr(x.message || String(x)); }
     setBusy(false);
@@ -7098,7 +7009,6 @@ function ImportExportModal({ onClose, properties, setProperties, supabaseClient,
 
   const activeChanges = preview && preview.changes ? preview.changes
     .filter((c) => !skip[c.id])
-    .map((c) => ({ ...c, fields: c.fields.filter((f) => includeClient || !f.isClient) }))
     .filter((c) => c.fields.length) : [];
   const chosenCreates = preview && preview.creates ? preview.creates.filter((_, i) => createOn[i]) : [];
 
@@ -7119,7 +7029,7 @@ function ImportExportModal({ onClose, properties, setProperties, supabaseClient,
     const nFields = activeChanges.reduce((s, c) => s + c.fields.length, 0);
     if (!window.confirm(`Apply ${nFields} change${nFields === 1 ? "" : "s"} to ${activeChanges.length} propert${activeChanges.length === 1 ? "y" : "ies"}${chosenCreates.length ? ` and create ${chosenCreates.length} new propert${chosenCreates.length === 1 ? "y" : "ies"}` : ""}?`)) return;
     setBusy(true); setErr(null);
-    const source = mode === "contracts" ? `Ironclad import ${ieToday()}` : `DD import ${ieToday()}`;
+    const source = `Ironclad import ${ieToday()}`;
     const logs = [];
     try {
       // New properties first, so their codes exist before anything is logged.
@@ -7130,23 +7040,16 @@ function ImportExportModal({ onClose, properties, setProperties, supabaseClient,
         if (!error && data) code = data;
         if (!code) throw new Error(`Couldn't get a new property code${error ? `: ${error.message}` : ""}`);
         const stub = newPropertyStub(c.name, code);
-        const program = mode === "contracts"
-          ? { ...stub.program, attributes: c.attrs, ddContractExecuted: c.ddContractExecuted || null, advisoryContractExecuted: c.advisoryContractExecuted || null, advisoryContractDrafted: c.advisoryContractDrafted || null, selectedOptions: c.selectedOptions, confirmedFees: c.confirmedFees, prospectStart: SMART_IMPORT_OPPORTUNITY_START_OVERWRITE }
-          : { ...stub.program, attributes: c.attrs, selectedOptions: {}, confirmedFees: {}, prospectStart: c.prospectStart || SMART_IMPORT_OPPORTUNITY_START_OVERWRITE };
+        const program = { ...stub.program, attributes: c.attrs, ddContractExecuted: c.ddContractExecuted || null, advisoryContractExecuted: c.advisoryContractExecuted || null, advisoryContractDrafted: c.advisoryContractDrafted || null, selectedOptions: c.selectedOptions, confirmedFees: c.confirmedFees, prospectStart: SMART_IMPORT_OPPORTUNITY_START_OVERWRITE };
         newProps.push({ ...stub, program });
         logs.push({ property_code: code, property_name: c.name, action: "add", field: "New property", old_value: null, new_value: code,
-          reason: mode === "contracts" ? "Added from the Ironclad export — no existing property matched this name" : (c.viaMaster ? "Added from the DD tab — linked to master at the same address" : "Added from the DD tab — not in master (new development or not Greystar managed)") });
+          reason: "Added from the Ironclad export — no existing property matched this name" });
       }
       const byId = {}; activeChanges.forEach((c) => { byId[c.id] = c; });
       setProperties((prev) => [...prev.map((p) => {
         const c = byId[p.id]; if (!c) return p;
-        if (mode === "contracts") {
-          let pr = p.program; c.fields.forEach((f) => { pr = f.apply(pr); });
-          return { ...p, program: pr };
-        }
-        const attrs = { ...(p.program.attributes || {}) };
-        c.fields.forEach((f) => { attrs[f.field] = f.newv; });
-        return { ...p, program: { ...p.program, attributes: attrs } };
+        let pr = p.program; c.fields.forEach((f) => { pr = f.apply(pr); });
+        return { ...p, program: pr };
       }), ...newProps]);
       activeChanges.forEach((c) => c.fields.forEach((f) => logs.push({
         property_code: c.code, property_name: c.name, action: "update", field: f.field,
@@ -7186,7 +7089,7 @@ function ImportExportModal({ onClose, properties, setProperties, supabaseClient,
         <div className="modal-head">
           <div>
             {mode && <button className="btn-ghost" onClick={() => reset(null)} disabled={busy} style={{ marginBottom: 6 }}>← Back</button>}
-            <h2>{mode === "contracts" ? "Refresh Contract Data" : mode === "attributes" ? "Refresh Master Attributes" : mode === "master" ? "Refresh Master Data" : "Import / Export"}</h2>
+            <h2>{mode === "contracts" ? "Refresh Contract Data" : mode === "master" ? "Refresh Master Data" : "Import / Export"}</h2>
           </div>
           <button className="icon-btn" onClick={onClose} disabled={busy}><X size={18} /></button>
         </div>
@@ -7201,8 +7104,6 @@ function ImportExportModal({ onClose, properties, setProperties, supabaseClient,
               <button className="btn-primary" onClick={() => reset("master")}>Choose</button>)}
             {card("Refresh Contract Data", "Upload the Ironclad All Status export. Updates advisory contract dates, selected services and confirmed fees.",
               <button className="btn-primary" onClick={() => reset("contracts")}>Choose</button>)}
-            {card("Refresh Master Attributes", "Upload the master tracker workbook (Due Diligence tab). Master data wins where the address matches; otherwise the DD tab fills in properties not in master.",
-              <button className="btn-primary" onClick={() => reset("attributes")}>Choose</button>)}
             {card("Refresh Billing (Revenue Tracker)", `Upload the CL Advisory Services Revenue Tracker. Replaces the billing shown on the Billing and Overview pages and checks it against Advisory Contracts.${billingImport && billingImport.source_file ? ` Current: ${billingImport.source_file}${billingImport.imported_at ? `, imported ${fmtDate(billingImport.imported_at.slice(0, 10))}` : ""}.` : ""}`,
               <button className="btn-primary" onClick={() => setRevenueOpen(true)}>Choose</button>)}
           </div>
@@ -7216,10 +7117,8 @@ function ImportExportModal({ onClose, properties, setProperties, supabaseClient,
               <div style={{ padding: "8px 0 4px" }}>
                 <p style={{ fontSize: 13, opacity: 0.85, marginTop: 0 }}>
                   {mode === "master"
-                    ? "Choose Greystar's Property Attributes (Master Level) export (.xlsx). You'll see the counts before anything is saved. Only master data changes here — the daily master sync then updates tracker properties from it (or run Refresh Master Attributes)."
-                    : mode === "contracts"
-                    ? "Choose the Ironclad All Status export (.xlsx or .csv). You'll see every change before anything is saved. Services are only ever turned on, never off; closed properties are skipped."
-                    : "Choose the master tracker workbook (.xlsm or .xlsx) with the Due Diligence tab. You'll see every change before anything is saved. Client is never changed unless you tick the option in the preview; properties already linked to master keep master's values; closed properties are skipped."}
+                    ? "Choose Greystar's Property Attributes (Master Level) export (.xlsx). You'll see the counts before anything is saved. Only master data changes here — the daily master sync then updates tracker properties from it."
+                    : "Choose the Ironclad All Status export (.xlsx or .csv). You'll see every change before anything is saved. Services are only ever turned on, never off; closed properties are skipped."}
                 </p>
                 <button className="btn-primary" disabled={busy} onClick={() => fileRef.current && fileRef.current.click()}>{busy ? "Reading file…" : "Choose file…"}</button>
               </div>
@@ -7230,7 +7129,7 @@ function ImportExportModal({ onClose, properties, setProperties, supabaseClient,
               <div style={{ fontSize: 13.5, lineHeight: 1.6 }}>
                 <div><b>Master data updated.</b> {done.saved.toLocaleString()} records saved ({done.activeAfter.toLocaleString()} active); {done.retired} marked no longer in master.</div>
                 {done.impacted.length > 0 && <div>The next daily sync will flag {done.impacted.length} tracker propert{done.impacted.length === 1 ? "y" : "ies"} whose Yardi code is no longer in master.</div>}
-                <div style={{ opacity: 0.8 }}>{done.logError ? `Saved, but writing the Change Log summary failed: ${done.logError}` : "A summary is in the Change Log. Tracker properties pick up the new values on the next daily sync, or run Refresh Master Attributes now."}</div>
+                <div style={{ opacity: 0.8 }}>{done.logError ? `Saved, but writing the Change Log summary failed: ${done.logError}` : "A summary is in the Change Log. Tracker properties pick up the new values on the next daily sync."}</div>
                 <button className="btn-ghost" style={{ marginTop: 10 }} onClick={() => reset(mode)}>Import another file</button>
               </div>
             )}
@@ -7290,26 +7189,19 @@ function ImportExportModal({ onClose, properties, setProperties, supabaseClient,
             {preview && preview.kind !== "master" && (
               <div>
                 <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
-                  {preview.fileName}{preview.ddCount ? ` · ${preview.ddCount} DD tab rows · ${preview.masterCount.toLocaleString()} current master records` : ""} ·{" "}
+                  {preview.fileName} ·{" "}
                   <b>{activeChanges.length}</b> propert{activeChanges.length === 1 ? "y" : "ies"} to update · {preview.creates.length} not in the tracker
                 </div>
-                {mode === "attributes" && preview.changes.some((c) => c.fields.some((f) => f.isClient)) && (
-                  <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, marginBottom: 10 }}>
-                    <input type="checkbox" checked={includeClient} onChange={(e) => setIncludeClient(e.target.checked)} />
-                    Also update Client from the DD tab ({preview.changes.filter((c) => c.fields.some((f) => f.isClient)).length} not-in-master properties)
-                  </label>
-                )}
                 <div style={{ maxHeight: "48vh", overflowY: "auto", border: "1px solid var(--border, #2c4170)", borderRadius: 8 }}>
                   {preview.changes.length === 0 && <div style={{ padding: 12, fontSize: 13, opacity: 0.8 }}>Everything already matches this file — no updates.</div>}
                   {preview.changes.map((c) => {
-                    const fields = c.fields.filter((f) => includeClient || !f.isClient);
+                    const fields = c.fields;
                     if (!fields.length) return null;
                     return (
                       <div key={c.id} style={{ padding: "8px 12px", borderBottom: "1px solid var(--border, #2c4170)", opacity: skip[c.id] ? 0.45 : 1 }}>
                         <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 600, fontSize: 13.5 }}>
                           <input type="checkbox" checked={!skip[c.id]} onChange={(e) => setSkip((s) => ({ ...s, [c.id]: !e.target.checked }))} />
                           <span className="mono">{c.code}</span> {c.name}
-                          {mode === "attributes" && <span style={{ fontWeight: 400, fontSize: 12, opacity: 0.75 }}>{c.viaMaster ? "· from master (address match)" : "· from the DD tab"}</span>}
                         </label>
                         <div style={{ marginLeft: 26, fontSize: 12.5 }}>
                           {fields.map((f) => <div key={f.field}>{f.field}: <span style={{ opacity: 0.65, textDecoration: "line-through" }}>{fmtV(f.oldv)}</span> → <b>{fmtV(f.newv)}</b></div>)}
@@ -7330,7 +7222,7 @@ function ImportExportModal({ onClose, properties, setProperties, supabaseClient,
                           <b>{c.name}</b>
                           <span style={{ opacity: 0.75 }}>
                             {[c.attrs && c.attrs.Client && c.attrs.Client !== "—" ? c.attrs.Client : null, c.attrs && c.attrs.City, c.attrs && c.attrs.State, c.attrs && c.attrs.Units ? `${c.attrs.Units} units` : null,
-                              mode === "contracts" ? (c.advisoryContractExecuted ? `executed ${c.advisoryContractExecuted}` : c.advisoryContractDrafted ? `drafted ${c.advisoryContractDrafted}` : null) : (c.viaMaster ? "in master" : "not in master")]
+                              c.advisoryContractExecuted ? `executed ${c.advisoryContractExecuted}` : c.advisoryContractDrafted ? `drafted ${c.advisoryContractDrafted}` : null]
                               .filter(Boolean).join(" · ")}
                           </span>
                           {(() => {
