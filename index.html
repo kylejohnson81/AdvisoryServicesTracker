@@ -1267,7 +1267,9 @@ function isPhaseContracted(program, phaseKey) {
   // Contracting & Legal and Post-Deployment Validation are never
   // independently selected — they follow from whichever real decision
   // actually drives them, same derivation buildPhases already uses.
-  if (phaseKey === "contractingLegal") return !!(opts.rfp || opts.incumbentNegotiation);
+  // Contracting & Legal is the "Contract Support" half of the Contract
+  // Support & Program Design service, so it's engaged only with it.
+  if (phaseKey === "contractingLegal") return !!opts.programDesign;
   if (phaseKey === "postDeploymentValidation") return !!opts.deployment;
   return !!opts[phaseKey];
 }
@@ -1524,7 +1526,10 @@ function buildPhases(program) {
   // flags already say everything needed.
   const derivedOptions = {
     ...executedOpts,
-    contractingLegal: !!(executedOpts.rfp || executedOpts.incumbentNegotiation),
+    // Contract Support & Program Design is one contracted service: legal
+    // review is only modeled when that service is engaged, never as a
+    // tail on RFP alone. The timeline models engaged services only.
+    contractingLegal: !!executedOpts.programDesign,
     postDeploymentValidation: !!executedOpts.deployment,
   };
 
@@ -1575,9 +1580,9 @@ function buildPhases(program) {
         // finished — every current-phase check in the app already
         // works by finding the first not-done phase in order, so this
         // falls out naturally rather than needing a separate rule.
-        const includeLegal = !!derivedOptions.contractingLegal;
         const includeDesign = !!executedOpts.programDesign;
-        if (!includeLegal && !includeDesign) return;
+        const includeLegal = includeDesign;
+        if (!includeDesign) return;
         const start = resolveServiceStart("programDesign", "Program Design", cursor);
         // Whichever side is genuinely contracted gets its normal, fresh-
         // start checklist; whichever isn't still gets a tile here too
