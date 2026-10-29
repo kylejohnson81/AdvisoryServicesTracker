@@ -862,6 +862,22 @@ tr.taskrow>td{background:#0f1c3f;padding:14px 16px 16px 46px}
         .cmap-pin .dot { stroke: #0A2245; stroke-width: 1.8; transition: r 0.12s; }
         .cmap-pin:hover .dot { r: 7; }
         .cmap-pin.big:hover .dot { r: 11; }
+        .cmap-flag { cursor: pointer; transition: transform 0.12s; }
+        .cmap-flag-body { stroke: #0A2245; stroke-width: 2.2; filter: drop-shadow(0 2px 3px rgba(0,0,0,0.45)); }
+        .cmap-flag-eye { fill: #0A2245; }
+        .cmap-flag .cmap-pin-label { font-size: 15px; font-weight: 700; }
+        .cmap-flag.hot .cmap-flag-body { stroke: #ffffff; }
+        .cmap-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+        .cmap-plist { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+        .cmap-plist-n { color: var(--ink-muted); font-size: 13px; }
+        .cmap-prow { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 2px 8px; align-items: center; width: 100%; padding: 7px 8px; border-radius: 6px; border: 1px solid transparent; }
+        .cmap-prow:hover, .cmap-prow.hot { background: var(--panel); border-color: rgba(244,160,90,0.55); }
+        .cmap-prow .sw { width: 10px; height: 10px; border-radius: 50%; grid-row: span 2; }
+        .cmap-prow .nm { font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .cmap-prow .cd { color: var(--ink-muted); font-size: 11.5px; font-weight: 400; }
+        .cmap-prow .cl { font-size: 11.5px; color: var(--ink-muted); grid-column: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .cmap-prow .ph { font-size: 11.5px; color: var(--ink-muted); grid-column: 3; grid-row: 1 / span 2; white-space: nowrap; }
+        .cmap-plist-foot { color: var(--ink-muted); font-size: 11.5px; margin-top: 8px; line-height: 1.4; }
         .cmap-pin-label { fill: var(--ink); font-size: 11px; text-anchor: middle; pointer-events: none; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
         .cmap-state:hover { filter: brightness(1.18); }
         .cmap-state.lg-active { fill: color-mix(in srgb, var(--panel) 55%, #f4a05a); stroke: rgba(244,160,90,0.9); }
@@ -8383,6 +8399,7 @@ function ClientMapView({ properties, onOpenProperty, legislation, onSaveLegislat
   const [showLegis, setShowLegis] = useState(true);
   const [showPins, setShowPins] = useState(true);
   const [selState, setSelState] = useState(null); // postal code of the state being viewed
+  const [hoverCode, setHoverCode] = useState(null); // property highlighted from the state list
   const wrapRef = React.useRef(null);
   const legisItems = (legislation && legislation.items) || LEGIS_SEED;
   const legisNotes = (legislation && legislation.notes) || [];
@@ -8464,7 +8481,7 @@ function ClientMapView({ properties, onOpenProperty, legislation, onSaveLegislat
     });
     // Fan out pins that land on top of each other (same zip / same city).
     placed.sort((a, b) => a.code.localeCompare(b.code));
-    const near = geo.sel ? 16 : 8;
+    const near = geo.sel ? 24 : 8;
     const groups = [];
     placed.forEach((m) => {
       const g = groups.find((g) => Math.hypot(g.x - m.x, g.y - m.y) < near);
@@ -8472,7 +8489,7 @@ function ClientMapView({ properties, onOpenProperty, legislation, onSaveLegislat
     });
     groups.forEach((g) => {
       const n = g.items.length; if (n < 2) return;
-      const rad = geo.sel ? 10 + n * 2.4 : 5 + n * 1.1;
+      const rad = geo.sel ? 16 + n * 4 : 5 + n * 1.1;
       g.items.forEach((m, i) => { const t = (i / n) * 2 * Math.PI - Math.PI / 2; m.x = g.x + rad * Math.cos(t); m.y = g.y + rad * Math.sin(t); });
     });
     return { pins: placed, unmapped };
@@ -8557,13 +8574,21 @@ function ClientMapView({ properties, onOpenProperty, legislation, onSaveLegislat
               })}</g>
               {geo.nation && <path d={geo.nation} className="cmap-nation" />}
               {showPins && <g>
-                {pins.filter(shown).map((r) => (
-                  <g key={r.code} transform={`translate(${r.x},${r.y})`} className={`cmap-pin${geo.sel ? " big" : ""}`}
+                {/* Highlighted flag drawn last so it sits on top. */}
+                {[...pins.filter(shown)].sort((a, b) => (a.code === hoverCode) - (b.code === hoverCode)).map((r) => geo.sel ? (
+                  <g key={r.code} transform={`translate(${r.x},${r.y})${r.code === hoverCode ? " scale(1.35)" : ""}`} className={`cmap-flag${r.code === hoverCode ? " hot" : ""}`}
+                     onMouseMove={(e) => { e.stopPropagation(); showTip(e, r); setHoverCode(r.code); }} onMouseLeave={() => { setTip(null); setHoverCode(null); }}
+                     onClick={(e) => { e.stopPropagation(); onOpenProperty(r.p); }}>
+                    <path d="M0 0 C-3 -7 -11 -12 -11 -22 A11 11 0 1 1 11 -22 C11 -12 3 -7 0 0 Z" fill={r.color} className="cmap-flag-body" strokeDasharray={r.approx ? "3 2" : undefined} />
+                    <circle cy={-22} r={4} className="cmap-flag-eye" />
+                    <text y={-38} className="cmap-pin-label">{r.code}</text>
+                  </g>
+                ) : (
+                  <g key={r.code} transform={`translate(${r.x},${r.y})`} className="cmap-pin"
                      onMouseMove={(e) => { e.stopPropagation(); showTip(e, r); }} onMouseLeave={() => setTip(null)}
                      onClick={(e) => { e.stopPropagation(); onOpenProperty(r.p); }}>
                     <circle r={pinR + 4} fill="transparent" />
                     <circle r={pinR} className="dot" fill={r.color} strokeDasharray={r.approx ? "2 2" : undefined} />
-                    {geo.sel && <text y={-pinR - 5} className="cmap-pin-label">{r.code}</text>}
                   </g>
                 ))}
               </g>}
@@ -8591,7 +8616,27 @@ function ClientMapView({ properties, onOpenProperty, legislation, onSaveLegislat
           )}
         </div>
         {selState && (
-          <LegislationPanel stateCode={selState} items={legisItems} notes={legisNotes} onSave={onSaveLegislation} userEmail={userEmail} />
+          <div className="cmap-side">
+            {showPins && (
+              <div className="cmap-plist">
+                <div className="lg-head"><h3>Client properties in {US_STATE_NAMES[selState] || selState}</h3><span className="cmap-plist-n">{pins.filter(shown).length}</span></div>
+                {!pins.filter(shown).length && <div className="lg-empty">No active advisory properties here{clientFilter ? ` for ${clientFilter}` : ""}.</div>}
+                {[...pins.filter(shown)].sort((a, b) => a.name.localeCompare(b.name)).map((r) => (
+                  <button key={r.code} className={`cmap-prow${r.code === hoverCode ? " hot" : ""}`}
+                    onMouseEnter={() => setHoverCode(r.code)} onMouseLeave={() => setHoverCode(null)} onClick={() => onOpenProperty(r.p)}>
+                    <span className="sw" style={{ background: r.color }} />
+                    <span className="nm"><b>{r.name}</b> <span className="cd">{r.code}</span></span>
+                    <span className="cl">{r.client}</span>
+                    <span className="ph">{r.phase}</span>
+                  </button>
+                ))}
+                {(legisByState[selState] || []).length > 0 && pins.filter(shown).length > 0 && (
+                  <div className="cmap-plist-foot">Subject to {(legisByState[selState] || []).length} tracked {(legisByState[selState] || []).length === 1 ? "measure" : "measures"} below; city and county measures apply only within those jurisdictions.</div>
+                )}
+              </div>
+            )}
+            <LegislationPanel stateCode={selState} items={legisItems} notes={legisNotes} onSave={onSaveLegislation} userEmail={userEmail} />
+          </div>
         )}
       </div>
 
