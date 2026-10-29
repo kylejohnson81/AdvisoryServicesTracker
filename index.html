@@ -2516,11 +2516,86 @@ const rtMoney2 = (n) => `${n < 0 ? "-" : ""}$${Math.abs(n).toLocaleString(undefi
 
 
 // Links a billing line to a tracker property: Yardi code first, then name.
+// Revenue Tracker property (by Yardi code or name) -> tracker property name,
+// for billing lines filed under a different name than the tracker uses.
+// Billing-only: this doesn't change the tracker property or its master pairing.
+const RT_PROPERTY_ALIASES = {
+  yardi: { nyviltux: "Tuxedo - The Commons" },
+  name: { "village at tuxedo reserve": "Tuxedo - The Commons" },
+};
+
 function rtPropertyMatcher(properties) {
   const byYardi = new Map(), byName = new Map();
   const nn = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
   (properties || []).forEach((p) => { const a = (p.program && p.program.attributes) || {}; if (a["Yardi Code"]) byYardi.set(String(a["Yardi Code"]).toLowerCase(), p); if (p.name) byName.set(nn(p.name), p); });
-  return (r) => (r.yardi_code && byYardi.get(String(r.yardi_code).toLowerCase())) || byName.get(nn(r.property)) || null;
+  const aliasYardi = new Map(Object.entries(RT_PROPERTY_ALIASES.yardi).map(([k, v]) => [k.toLowerCase(), nn(v)]));
+  const aliasName = new Map(Object.entries(RT_PROPERTY_ALIASES.name).map(([k, v]) => [nn(k), nn(v)]));
+  return (r) => (r.yardi_code && byYardi.get(String(r.yardi_code).toLowerCase())) || byName.get(nn(r.property))
+    || (r.yardi_code && aliasYardi.has(String(r.yardi_code).toLowerCase()) && byName.get(aliasYardi.get(String(r.yardi_code).toLowerCase())))
+    || (aliasName.has(nn(r.property)) && byName.get(aliasName.get(nn(r.property))))
+    || null;
+}
+
+// Advisory Contracts guide billing: a Revenue Tracker line only counts when it
+// matches a tracker property with an executed advisory contract that includes
+// the service the line bills for. Returns null when it counts, otherwise why not.
+function rtNotContractedReason(r, p) {
+  if (!p) return "No matching property on the tracker";
+  const prog = p.program || {};
+  if (!prog.advisoryContractExecuted) return "No executed advisory contract";
+  const svc = RT_BUCKET_SERVICE[String(r.service_bucket || "").trim().toLowerCase()];
+  if (!svc) return `Unrecognized service bucket "${r.service_bucket || ""}"`;
+  const opts = prog.selectedOptions || {};
+  if (!svc.keys.some((k) => opts[k])) return `${svc.label} isn't on the advisory contract`;
+  return null;
+}
+
+// Splits evaluated lines into those that count (contracted) and those that don't (excluded).
+function rtSplitByContract(evaluated, properties) {
+  const match = rtPropertyMatcher(properties);
+  const contracted = [], excluded = [];
+  (evaluated || []).forEach((r) => {
+    const p = match(r);
+    const reason = rtNotContractedReason(r, p);
+    if (reason) excluded.push({ line: r, property: p, reason }); else contracted.push(r);
+  });
+  return { contracted, excluded };
+}
+
+// Lists Revenue Tracker lines left out of billing because Advisory Contracts doesn't cover them.
+function RtExcludedPanel({ excluded, onOpenProperty }) {
+  const [open, setOpen] = useState(false);
+  if (!excluded || !excluded.length) return null;
+  const total = excluded.reduce((s, x) => s + (x.line.invoiced || 0), 0);
+  return (
+    <div className="card" style={{ marginTop: 12 }}>
+      <button className="link" style={{ textDecoration: "none", color: "var(--txt)", display: "flex", gap: 8, alignItems: "center", width: "100%" }} onClick={() => setOpen((v) => !v)}>
+        <b style={{ fontWeight: 600 }}>Not on Advisory Contracts, not counted</b>
+        <span style={{ color: "var(--mut)" }}>{excluded.length} line{excluded.length === 1 ? "" : "s"} · {rtMoney(total)}</span>
+        <span style={{ marginLeft: "auto", color: "var(--mut)", fontSize: 12 }}>{open ? "Hide" : "Show"}</span>
+      </button>
+      {open && (
+        <div className="tw" style={{ marginTop: 8 }}>
+          <table className="rt-table">
+            <thead><tr><th>Property</th><th>Engagement</th><th>Service</th><th>Milestone</th><th className="r">Amount</th><th>Why it isn't counted</th></tr></thead>
+            <tbody>
+              {excluded.map(({ line: r, property: p, reason }) => (
+                <tr key={r.source_row}>
+                  <td className="rt-wrap">{p ? <button className="link" onClick={() => onOpenProperty && onOpenProperty(p)}>{p.code} {p.name}</button> : r.property}</td>
+                  <td>{r.engagement_id}</td>
+                  <td className="rt-wrap">{r.service_bucket}</td>
+                  <td>{r.billing_milestone || "—"}</td>
+                  <td className="r">{rtMoney(r.invoiced)}</td>
+                  <td className="rt-wrap" style={{ color: "var(--mut)" }}>{reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="foot" style={{ marginTop: 6 }}>Advisory Contracts guides billing. These lines are left out of every billing total until the property's advisory contract is executed with that service selected.</div>
+    </div>
+  );
 }
 
 // Service bucket -> the Advisory Contracts service(s) it bills for.
@@ -2751,10 +2826,13 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
   const [showWarnings, setShowWarnings] = useState(false);
   const imp = billingImport && Array.isArray(billingImport.records) ? billingImport : null;
 
-  const evaluated = useMemo(() => imp ? imp.records.map((r) => rtEvaluate(r, asOf || TODAY, imp.settings)) : [], [imp, asOf]);
+  const evaluatedAll = useMemo(() => imp ? imp.records.map((r) => rtEvaluate(r, asOf || TODAY, imp.settings)) : [], [imp, asOf]);
+  // Advisory Contracts guides billing: only lines for an executed, contracted service count.
+  const split = useMemo(() => rtSplitByContract(evaluatedAll, allProperties || properties), [evaluatedAll, allProperties, properties]);
+  const evaluated = split.contracted;
   // Link billing rows to tracker properties by Yardi code, then by name.
   const findProperty = useMemo(() => rtPropertyMatcher(allProperties || properties), [allProperties, properties]);
-  const checks = useMemo(() => rtContractChecks(evaluated, allProperties || properties), [evaluated, allProperties, properties]);
+  const checks = useMemo(() => rtContractChecks(evaluatedAll, allProperties || properties), [evaluatedAll, allProperties, properties]);
 
   const tabDef = RT_TABS.find((x) => x.key === tab);
   const scoped = tab === "totals" ? evaluated : evaluated.filter((r) => r.service_bucket.toLowerCase() === tabDef.bucket);
@@ -2843,6 +2921,7 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
             </div>
 
             <RtChecksPanel checks={checks} onOpenProperty={onOpenProperty} />
+            <RtExcludedPanel excluded={split.excluded} onOpenProperty={onOpenProperty} />
 
             <div className="tabs" role="tablist">
               <button className={tab === "totals" ? "on" : ""} onClick={() => setTab("totals")}>Property totals</button>
@@ -3757,14 +3836,17 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
   // the Advisory Contracts fees.
   const importBilling = useMemo(() => {
     if (!billingImport || !Array.isArray(billingImport.records)) return null;
-    const ev = billingImport.records.map((r) => rtEvaluate(r, TODAY, billingImport.settings));
+    const evAll = billingImport.records.map((r) => rtEvaluate(r, TODAY, billingImport.settings));
+    // Advisory Contracts guides billing: only lines for an executed, contracted service count.
+    const { contracted: ev, excluded } = rtSplitByContract(evAll, allProperties || properties);
     const t = rtTotals(ev);
     const owed = { greystar: { pending: 0, invoiced: 0, overdue: 0 }, rovr: { pending: 0, invoiced: 0, overdue: 0 } };
-    // Properties with any unpaid line — the same set the Payments due dollar figure covers.
+    // Tracker properties with any unpaid line — the same set the Payments due dollar figure covers.
+    const unpaidMatch = rtPropertyMatcher(allProperties || properties);
     const unpaidKeys = new Set();
     ev.forEach((r) => {
       if (r.payment_status === "Paid") return;
-      if (r.invoiced > 0) unpaidKeys.add(rtBaseId(r.engagement_id));
+      if (r.invoiced > 0) { const up = unpaidMatch(r); unpaidKeys.add(up ? `p${up.id}` : rtBaseId(r.engagement_id)); }
       const bucket = r.payment_status === "Past due" ? "overdue" : r.payment_status === "Current" ? "invoiced" : "pending";
       const rv = Math.max(0, Math.min(r.rovr_pending, r.invoiced));
       owed.rovr[bucket] += rv; owed.greystar[bucket] += r.invoiced - rv;
@@ -3782,6 +3864,7 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
       summary: { pending: t.not_invoiced, invoiced: t.current, paid: t.paid, overdue: t.past_due, unpaidProperties: unpaidKeys.size, rovrPaid: t.rovr_paid, rovrPending: t.rovr_pending, owed },
       payments: [...byP.values()].sort((a, b) => b.total - a.total),
       unmatched, source: billingImport.source_file || "Revenue Tracker", importedAt: billingImport.imported_at || null,
+      excludedCount: excluded.length, excludedTotal: excluded.reduce((sum, x) => sum + (x.line.invoiced || 0), 0),
     };
   }, [billingImport, properties, allProperties]);
   const billingSummary = importBilling ? { ...legacyBillingSummary, ...importBilling.summary } : legacyBillingSummary;
@@ -3850,7 +3933,7 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
           ))}
         </div>
 
-        <div className="sec">Billing{importBilling && <span style={{ fontWeight: 400 }}> · from {importBilling.source}{importBilling.importedAt ? `, imported ${fmtDate(importBilling.importedAt.slice(0, 10))}` : ""}</span>}</div>
+        <div className="sec">Billing{importBilling && <span style={{ fontWeight: 400 }}> · from {importBilling.source}{importBilling.importedAt ? `, imported ${fmtDate(importBilling.importedAt.slice(0, 10))}` : ""}{importBilling.excludedCount > 0 && <> · <button className="link" onClick={() => onOpenBilling && onOpenBilling("all")} title="See them on the Billing page">{importBilling.excludedCount} line{importBilling.excludedCount === 1 ? "" : "s"} ({money(importBilling.excludedTotal)}) not on Advisory Contracts, not counted</button></>}</span>}</div>
         <div className="kpis">
           <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("due")} title="Open Billing: all unpaid payments">
             <div className="v c-a">{money(unpaidTotal)}</div><div className="k">Payments due</div>
@@ -7150,7 +7233,8 @@ function AdvisoryContractsView({ properties, onOpenProperty, supabaseClient, bil
     if (!billingImport || !Array.isArray(billingImport.records)) return m;
     const ev = billingImport.records.map((r) => rtEvaluate(r, TODAY, billingImport.settings));
     const match = rtPropertyMatcher(properties);
-    ev.forEach((r) => { const p = match(r); if (!p) return; if (!m.has(p.id)) m.set(p.id, { billed: 0, paid: 0, checks: [] }); const e = m.get(p.id); e.billed += r.invoiced; e.paid += r.paid; });
+    // Billed/paid only count lines Advisory Contracts covers; the checks below still see every line.
+    rtSplitByContract(ev, properties).contracted.forEach((r) => { const p = match(r); if (!p) return; if (!m.has(p.id)) m.set(p.id, { billed: 0, paid: 0, checks: [] }); const e = m.get(p.id); e.billed += r.invoiced; e.paid += r.paid; });
     rtContractChecks(ev, properties).forEach((c) => { if (!c.property) return; if (!m.has(c.property.id)) m.set(c.property.id, { billed: 0, paid: 0, checks: [] }); m.get(c.property.id).checks.push(c); });
     return m;
   }, [billingImport, properties]);
