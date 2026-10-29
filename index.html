@@ -997,7 +997,7 @@ const OFFICES_SEED = [
 // property, even if empty — meant to expand over time as new fields are
 // needed. Anything else already present on a property's attributes still
 // shows up too, just below this core set.
-const CORE_ATTRIBUTE_KEYS = ["Yardi Code", "Client", "Region", "Office", "Units", "Project Type", "PMA Status", "RPM", "RPM Email", "CM", "CM Email", "Client Services", "Outside Counsel"];
+const CORE_ATTRIBUTE_KEYS = ["Yardi Code", "Client", "Region", "Office", "Units", "Contract Units", "Project Type", "PMA Status", "RPM", "RPM Email", "CM", "CM Email", "Client Services", "Outside Counsel"];
 // PMA (Property Management Agreement) status — whether Greystar
 // actually operates this asset. A simple Yes/No would flatten a real,
 // operationally meaningful distinction: "Active PMA" means a real
@@ -3027,7 +3027,7 @@ function LegacyBillingView({ properties, onOpenProperty, onSetPaymentStatus, onE
       [["dueDiligence", opts.dueDiligence, billing.dueDiligence], ["rfp", opts.rfp, billing.rfp], ["programDesign", opts.programDesign, billing.programDesign]]
         .forEach(([phaseKey, selected, feeObj]) => {
           if (!selected || !feeObj || feeObj.credited) return;
-          rows.push({ property: p, phaseKey, phaseLabel: BILLING_PHASE_META[phaseKey].label, total: feeObj.total, firstHalf: feeObj.firstHalf, secondHalf: feeObj.secondHalf, rate, units: p.program.attributes.Units || 0 });
+          rows.push({ property: p, phaseKey, phaseLabel: BILLING_PHASE_META[phaseKey].label, total: feeObj.total, firstHalf: feeObj.firstHalf, secondHalf: feeObj.secondHalf, rate, units: contractUnitsOf(p) });
         });
     });
     return rows;
@@ -6115,8 +6115,17 @@ function findTodoStatus(property, phaseKey, textMatch) {
     : { exists: false, done: false, phaseEnd: phase.end, phaseDone: !!phase.done };
 }
 
+// Contracts define fees, not master data: the unit count on the advisory
+// contract ("Contract Units") drives every fee. Master sync updates Units but
+// never Contract Units; Units is only the fallback when Contract Units is blank.
+function contractUnitsOf(property) {
+  const a = (property && property.program && property.program.attributes) || {};
+  const cu = Number(a["Contract Units"]);
+  return cu > 0 ? cu : (Number(a.Units) || 0);
+}
+
 function computeAdvisoryBilling(property) {
-  const units = property.program.attributes.Units;
+  const units = contractUnitsOf(property);
   const projectType = property.program.attributes["Project Type"] || "Retrofit";
   const contractExecuted = property.program.advisoryContractExecuted;
   const fee = calculateAdvisoryFee(units, projectType);
@@ -7249,7 +7258,7 @@ function AdvisoryContractsView({ properties, onOpenProperty, supabaseClient, bil
       if (closed) status = "Closed";
       else if (cs && cs.status) { statusFull = cs.status; status = /pending/i.test(cs.status) ? "Pending execution" : cs.status; }
       else { try { status = currentPhaseGroupLabel(p); } catch (e) { status = ""; } }
-      const units = Number(a.Units) || null;
+      const units = contractUnitsOf(p) || null;
       return {
         p, closed, executed, drafted: p.program.advisoryContractDrafted || null,
         client: a.Client || "", units, type: a["Project Type"] || "Retrofit",
@@ -8573,6 +8582,7 @@ function App() {
         "Region": attrs.Region || "",
         "Office": attrs.Office || "",
         "Units": attrs.Units || "",
+        "Contract Units": attrs["Contract Units"] || "",
         "Project Type": attrs["Project Type"] || "",
         "Yardi Code": attrs["Yardi Code"] || "",
         "PMA Status": attrs["PMA Status"] || "",
