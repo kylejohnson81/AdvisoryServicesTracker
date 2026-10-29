@@ -887,7 +887,9 @@ tr.taskrow>td{background:#0f1c3f;padding:14px 16px 16px 46px}
         .cmap-state.sel:hover { filter: none; }
         .cmap-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
         .cmap-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); cursor: pointer; }
-        .cmap-back { font-size: 14px; margin-right: 6px; }
+        .cmap-back-btn { all: unset; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--ink); background: var(--panel-alt); border: 1px solid rgba(244,160,90,0.7); border-radius: 6px; padding: 6px 12px; margin-right: 10px; vertical-align: middle; }
+        .cmap-back-btn:hover { background: rgba(244,160,90,0.22); }
+        .cmap-back-float { position: absolute; top: 14px; left: 14px; z-index: 4; box-shadow: 0 4px 14px rgba(0,0,0,0.35); }
         .cmap-lg-key { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink); padding: 4px 6px; }
         .cmap-lg-key .box { width: 14px; height: 10px; border-radius: 2px; border: 1px solid rgba(244,160,90,0.85); }
         .cmap-lg-key .box.active { background: color-mix(in srgb, var(--panel) 55%, #f4a05a); }
@@ -8510,6 +8512,14 @@ function ClientMapView({ properties, onOpenProperty, legislation, onSaveLegislat
   };
   const toggle = (ph) => setHidden((s) => { const n = new Set(s); n.has(ph) ? n.delete(ph) : n.add(ph); return n; });
   const openState = (code) => { if (code) { setSelState(code); setTip(null); } };
+  const backToUs = () => { setSelState(null); setTip(null); setHoverCode(null); };
+  // Esc returns to the national map (unless typing in a field).
+  useEffect(() => {
+    if (!selState) return;
+    const onKey = (e) => { if (e.key === "Escape" && !/^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || "") && !(e.target && e.target.isContentEditable)) backToUs(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selState]);
 
   const trackedStates = Object.keys(legisByState).sort((a, b) => (US_STATE_NAMES[a] || a).localeCompare(US_STATE_NAMES[b] || b));
   const activeStates = trackedStates.filter((c) => legisTierFor(legisByState[c]) === "active");
@@ -8520,7 +8530,7 @@ function ClientMapView({ properties, onOpenProperty, legislation, onSaveLegislat
     <div className="cmap">
       <div className="cmap-head">
         <div>
-          <h2>{selState ? <><button className="link cmap-back" onClick={() => { setSelState(null); setTip(null); }}>← US map</button> {US_STATE_NAMES[selState] || selState}</> : "Client Map"}</h2>
+          <h2>{selState ? <><button className="cmap-back-btn" onClick={backToUs}>← Back to US map</button> {US_STATE_NAMES[selState] || selState}</> : "Client Map"}</h2>
           <div className="cmap-sub">
             {selState
               ? `${statePinCount} active advisory ${statePinCount === 1 ? "property" : "properties"} in ${US_STATE_NAMES[selState] || selState} · ${(legisByState[selState] || []).length} tracked ${(legisByState[selState] || []).length === 1 ? "measure" : "measures"}`
@@ -8558,6 +8568,7 @@ function ClientMapView({ properties, onOpenProperty, legislation, onSaveLegislat
 
       <div className={`cmap-body${selState ? " split" : ""}`}>
         <div className="cmap-frame" ref={wrapRef} onMouseLeave={() => setTip(null)}>
+          {selState && <button className="cmap-back-btn cmap-back-float" onClick={backToUs} title="Back to the US map (Esc)">← Back to US map</button>}
           {!geo && <div className="cmap-msg">{atlasError ? "Couldn't load the map outline — check your connection and refresh." : "Loading map…"}</div>}
           {geo && (
             <svg viewBox={`0 0 ${W} ${H}`} className="cmap-svg">
