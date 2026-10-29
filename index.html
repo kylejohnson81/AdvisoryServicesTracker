@@ -2602,6 +2602,7 @@ const RT_BUCKET_SERVICE = {
 };
 const RT_CHECK_META = {
   noMatch: { sev: "warn", title: "Billing line not matched to a tracker property" },
+  multiEngagement: { sev: "warn", title: "More than one engagement ID for one property" },
   noContract: { sev: "error", title: "Billed, but no executed advisory contract" },
   serviceNotContracted: { sev: "error", title: "Service billed that isn't on the contract" },
   billedBeforeExecution: { sev: "warn", title: "Invoiced before the contract was executed" },
@@ -2632,6 +2633,10 @@ function rtContractChecks(evaluated, properties) {
     const prog = p.program || {};
     const opts = prog.selectedOptions || {};
     const executed = prog.advisoryContractExecuted || null;
+    // One contract per property should mean one engagement ID in the Revenue Tracker.
+    const engs = new Map();
+    lines.forEach((l) => { const k = rtBaseId(l.engagement_id); if (!engs.has(k)) engs.set(k, { names: new Set(), total: 0 }); const g = engs.get(k); g.names.add(l.property); g.total += l.invoiced; });
+    if (engs.size > 1) add("multiEngagement", `${engs.size} engagement IDs in the Revenue Tracker: ${[...engs.entries()].map(([k, g]) => `${k} (${[...g.names].join(" / ")}, ${rtMoney(g.total)})`).join("; ")}. Merge them into one in the file.`, p, lines);
     if (!executed) add("noContract", `${lines.length} billing line${lines.length === 1 ? "" : "s"} (${rtMoney(lines.reduce((s, l) => s + l.invoiced, 0))})${prog.advisoryContractDrafted ? `; contract drafted ${fmtDate(prog.advisoryContractDrafted)} but not executed` : "; no advisory contract on the tracker"}.`, p, lines);
     let billing = null; try { billing = computeAdvisoryBilling(p); } catch (e) {}
     const buckets = new Map();
@@ -2839,12 +2844,17 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
   const agg = useMemo(() => rtTotals(scoped), [scoped]);
   const tabsPresent = RT_TABS.filter((x) => evaluated.some((r) => r.service_bucket.toLowerCase() === x.bucket));
 
+  // One row per tracker property (P-code), whatever engagement IDs or names
+  // the Revenue Tracker files its lines under; those engagement IDs are listed.
   const propertyTotals = useMemo(() => {
     const m = new Map();
     scoped.forEach((r) => {
-      const k = rtBaseId(r.engagement_id);
-      if (!m.has(k)) m.set(k, { key: k, property: r.property, client: r.client_owner, lines: [], total: 0, paid: 0, outstanding: 0, rovr_paid: 0, rovr_pending: 0, maxDays: 0 });
+      const tracker = findProperty(r);
+      const k = tracker ? `p${tracker.id}` : rtBaseId(r.engagement_id);
+      if (!m.has(k)) m.set(k, { key: k, tracker, property: tracker ? tracker.name : r.property, client: r.client_owner, engagements: [], lines: [], total: 0, paid: 0, outstanding: 0, rovr_paid: 0, rovr_pending: 0, maxDays: 0 });
       const e = m.get(k);
+      const eid = rtBaseId(r.engagement_id);
+      if (eid && !e.engagements.includes(eid)) e.engagements.push(eid);
       e.lines.push(r); e.total += r.invoiced; e.paid += r.paid; e.outstanding += r.outstanding; e.rovr_paid += r.rovr_paid; e.rovr_pending += r.rovr_pending;
       if (r.days_past_due > e.maxDays) e.maxDays = r.days_past_due;
     });
@@ -2852,8 +2862,8 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
       const st = e.lines.some((l) => l.payment_status === "Past due") ? "Past due"
         : e.lines.every((l) => l.payment_status === "Paid") ? "Paid"
         : e.lines.some((l) => l.payment_status === "Current") ? "Current" : "Not invoiced";
-      return { ...e, status: st, tracker: findProperty(e.lines[0]) };
-    }).sort((a, b) => a.key.localeCompare(b.key));
+      return { ...e, status: st };
+    }).sort((a, b) => String(a.tracker ? a.tracker.code : `~${a.key}`).localeCompare(String(b.tracker ? b.tracker.code : `~${b.key}`)));
   }, [scoped, findProperty]);
 
   // No Revenue Tracker imported yet: go straight to the calculated billing dashboard.
@@ -2876,9 +2886,10 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
   }
 
   const statusPill = (st, days) => <span className={`pill ${RT_STATUS_PILL[st]}`} title={st === "Past due" ? `${days} days past due (net 30)` : st}>{RT_STATUS_LABEL[st]}{st === "Past due" && days ? ` · ${days}d` : ""}</span>;
-  const nameCell = (label, tracker, eid) => (
+  const nameCell = (label, tracker, eid, engagements) => (
     <td className={`rt-wrap${tracker ? " click" : ""}`} onClick={tracker ? (ev) => { ev.stopPropagation(); onOpenProperty(tracker); } : undefined} style={tracker ? { cursor: "pointer" } : undefined}>
       <div>{label}</div><span className="id" style={tracker ? undefined : { opacity: 0.6 }}>{tracker ? tracker.code : eid}</span>
+      {engagements && engagements.length > 0 && <span className="id" style={{ opacity: 0.6, marginLeft: 6 }} title="Revenue Tracker engagement IDs">{engagements.join(", ")}</span>}
     </td>
   );
 
@@ -2941,7 +2952,7 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
                       <tr><td colSpan={10} style={{ color: "var(--mut)" }}>No properties match.</td></tr>
                     ) : propertyTotals.filter((x) => x.lines.some(shown)).map((x) => (
                       <tr key={x.key} className={x.tracker ? "click" : ""} onClick={x.tracker ? () => onOpenProperty(x.tracker) : undefined}>
-                        {nameCell(x.property, x.tracker, x.key)}
+                        {nameCell(x.property, x.tracker, x.key, x.engagements)}
                         <td className="rt-wrap">{x.client || "—"}</td>
                         <td className="r">{x.lines.length}</td>
                         <td className="r">{rtMoney(x.total)}</td>
