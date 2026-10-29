@@ -2516,6 +2516,12 @@ const rtMoney2 = (n) => `${n < 0 ? "-" : ""}$${Math.abs(n).toLocaleString(undefi
 
 
 // Links a billing line to a tracker property: Yardi code first, then name.
+// A property's "Previous Names" attribute, lowercased (separate several with ; or a new line).
+function previousNamesOf(p) {
+  const a = (p && p.program && p.program.attributes) || {};
+  return String(a["Previous Names"] || "").split(/[;|\n]+/).map((x) => x.trim().toLowerCase()).filter(Boolean);
+}
+
 function rtPropertyMatcher(properties) {
   const byYardi = new Map(), byName = new Map(), byPrevName = new Map();
   const nn = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -5440,13 +5446,13 @@ function EconomicModelModal({ property, onClose, onSave }) {
 // ambiguous gets flagged for a person to look at here, in the
 // interface, rather than silently applied.
 // ============================================================
+// Name aliases for imports. A property's own "Previous Names" attribute is
+// matched too (see previousNamesOf), so prefer adding old names there.
 const SMART_IMPORT_ALIASES = {
   "anthology": "anthology apartments",
   "saratoga downs": "saratoga downs at sheveland ranch",
-  "126 lafayette st.": "lafayette",
   "dorian": "alto apartments (now dorian)",
   "union heights (fka flats at atlas)": "union heights",
-  "village at tuxedo reserve": "tuxedo - the commons",
 };
 
 // DELIBERATE DISPLAY OVERWRITE — not a data-accuracy fix. Every property's
@@ -5951,6 +5957,10 @@ function buildContractsRefreshResult(ironcladSelections, executed, draftedOnly, 
   const creates = [];
   const existingByKey = {};
   existingProperties.forEach((p) => { existingByKey[p.name.trim().toLowerCase()] = p; });
+  // Also match a property's Previous Names, so a renamed property isn't offered as new.
+  existingProperties.forEach((p) => previousNamesOf(p).forEach((n) => {
+    [n, SMART_IMPORT_ALIASES[n]].filter(Boolean).forEach((k) => { if (!existingByKey[k]) existingByKey[k] = p; });
+  }));
 
   const allKeys = new Set([...Object.keys(ironcladSelections), ...Object.keys(executed), ...Object.keys(draftedOnly)]);
   for (const key of allKeys) {
@@ -6722,6 +6732,8 @@ const ieNameKey = (name) => { const k = ieStr(name).toLowerCase(); return SMART_
 const ieTrackerByName = (properties) => {
   const m = {};
   properties.forEach((p) => { m[ieNameKey(p.name)] = p; });
+  // Previous Names match too; a current name always wins.
+  properties.forEach((p) => previousNamesOf(p).forEach((n) => { const k = ieNameKey(n); if (!m[k]) m[k] = p; }));
   return m;
 };
 
