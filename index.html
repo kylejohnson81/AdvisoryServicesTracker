@@ -2525,12 +2525,20 @@ const RT_PROPERTY_ALIASES = {
 };
 
 function rtPropertyMatcher(properties) {
-  const byYardi = new Map(), byName = new Map();
+  const byYardi = new Map(), byName = new Map(), byPrevName = new Map();
   const nn = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  (properties || []).forEach((p) => { const a = (p.program && p.program.attributes) || {}; if (a["Yardi Code"]) byYardi.set(String(a["Yardi Code"]).toLowerCase(), p); if (p.name) byName.set(nn(p.name), p); });
+  (properties || []).forEach((p) => {
+    const a = (p.program && p.program.attributes) || {};
+    if (a["Yardi Code"]) byYardi.set(String(a["Yardi Code"]).toLowerCase(), p);
+    if (p.name) byName.set(nn(p.name), p);
+    // A property's "Previous Names" attribute (separate several with ; or a new line)
+    // also matches billing lines filed under those names.
+    String(a["Previous Names"] || "").split(/[;|\n]+/).map(nn).filter(Boolean).forEach((k) => { if (!byPrevName.has(k)) byPrevName.set(k, p); });
+  });
   const aliasYardi = new Map(Object.entries(RT_PROPERTY_ALIASES.yardi).map(([k, v]) => [k.toLowerCase(), nn(v)]));
   const aliasName = new Map(Object.entries(RT_PROPERTY_ALIASES.name).map(([k, v]) => [nn(k), nn(v)]));
   return (r) => (r.yardi_code && byYardi.get(String(r.yardi_code).toLowerCase())) || byName.get(nn(r.property))
+    || byPrevName.get(nn(r.property))
     || (r.yardi_code && aliasYardi.has(String(r.yardi_code).toLowerCase()) && byName.get(aliasYardi.get(String(r.yardi_code).toLowerCase())))
     || (aliasName.has(nn(r.property)) && byName.get(aliasName.get(nn(r.property))))
     || null;
