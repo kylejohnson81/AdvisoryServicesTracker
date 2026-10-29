@@ -1263,13 +1263,30 @@ const PHASE_DEFS = [
 // chooses or skips the way RFP, Program Design, or Deployment are.
 const NOT_CONTRACTED_ELIGIBLE_KEYS = ["rfp", "incumbentNegotiation", "contractingLegal", "programDesign", "deployment", "postDeploymentValidation"];
 function isPhaseContracted(program, phaseKey) {
-  const opts = program.selectedOptions || {};
+  const opts = contractedOptionsOf(program);
   // Contracting & Legal and Post-Deployment Validation are never
   // independently selected — they follow from whichever real decision
   // actually drives them, same derivation buildPhases already uses.
   if (phaseKey === "contractingLegal") return !!(opts.rfp || opts.incumbentNegotiation);
   if (phaseKey === "postDeploymentValidation") return !!opts.deployment;
   return !!opts[phaseKey];
+}
+// Services only count as contracted once the advisory contract is
+// executed. A drafted agreement's service selections are proposals:
+// they're kept on the record but never drive phases, icons or billing.
+function contractedOptionsOf(program) {
+  if (!program || !program.advisoryContractExecuted) return {};
+  return program.selectedOptions || {};
+}
+// A service's own contract execution date: the date recorded for that
+// service (an amendment adds a later one), else the advisory contract's
+// execution date. Null when the service isn't on an executed contract.
+function serviceExecutedDate(program, optionKey) {
+  if (!program || !program.advisoryContractExecuted) return null;
+  const opts = program.selectedOptions || {};
+  const svcKey = optionKey === "dueDiligence" ? "rfp" : optionKey;
+  if (!opts[optionKey]) return null;
+  return ((program.serviceContractDates || {})[svcKey]) || program.advisoryContractExecuted;
 }
 const OPTIONAL_PHASES = [
   PHASE_DEFS.find((d) => d.key === "rfp"),
@@ -1419,7 +1436,9 @@ function buildPhases(program) {
   // on the same contract" — confirmed directly against a real executed
   // agreement. DD therefore always shares Advisory's own contract date;
   // there's no independent ddContractExecuted date anymore.
-  const ddSelected = !!(program.selectedOptions && program.selectedOptions.dueDiligence);
+  const executedOpts = contractedOptionsOf(program);
+  const draftedOnly = !program.advisoryContractExecuted && !!program.advisoryContractDrafted;
+  const ddSelected = !!executedOpts.dueDiligence;
   // A property flows into Advisory Service Contracting the moment a
   // contract is genuinely drafted, not only once it's executed —
   // drafting isn't a separate pre-phase state, it's the real start of
@@ -1480,7 +1499,7 @@ function buildPhases(program) {
   // draft genuinely exists), "NSC drafts advisory services agreement for
   // business unit review" reflects that automatically — driven by real
   // external data, not something anyone needs to click by hand.
-  const optionsChosen = Object.values(program.selectedOptions || {}).some(Boolean);
+  const optionsChosen = Object.values(executedOpts).some(Boolean);
   const advEnd = actualEnd(optionsChosen, advData.completedDate, advCalcEnd);
   const advTodos = (advData.todos || []).map((t) => {
     if (t.text === ADVISORY_TRACKER_STEP) return { ...t, done: optionsChosen };
@@ -1489,7 +1508,11 @@ function buildPhases(program) {
     }
     return t;
   });
-  phases.push({ ...advDef, start: advisoryStart, end: advEnd, ...advData, todos: advTodos, done: optionsChosen, defaultDeadline: advCalcEnd, durationNote: durNote("advisory") });
+  // Drafted but not executed: the property sits in its own "Advisory
+  // Contracts Drafted" phase — none of the draft's proposed services
+  // appear until the agreement is actually executed.
+  const advLabel = draftedOnly ? { label: "Advisory Contracts Drafted", color: STATUS_META["Advisory Contracts Drafted"].color, drafted: true } : {};
+  phases.push({ ...advDef, ...advLabel, start: advisoryStart, end: advEnd, ...advData, todos: advTodos, done: optionsChosen, defaultDeadline: advCalcEnd, durationNote: durNote("advisory") });
 
   // Contracting & Legal and Post-Deployment Validation are never
   // independently selected by anyone — they follow automatically from
@@ -1500,9 +1523,9 @@ function buildPhases(program) {
   // or imported — the existing rfp/incumbentNegotiation/deployment
   // flags already say everything needed.
   const derivedOptions = {
-    ...program.selectedOptions,
-    contractingLegal: !!(program.selectedOptions.rfp || program.selectedOptions.incumbentNegotiation),
-    postDeploymentValidation: !!program.selectedOptions.deployment,
+    ...executedOpts,
+    contractingLegal: !!(executedOpts.rfp || executedOpts.incumbentNegotiation),
+    postDeploymentValidation: !!executedOpts.deployment,
   };
 
   let cursor = advEnd;
@@ -1553,7 +1576,7 @@ function buildPhases(program) {
         // works by finding the first not-done phase in order, so this
         // falls out naturally rather than needing a separate rule.
         const includeLegal = !!derivedOptions.contractingLegal;
-        const includeDesign = !!program.selectedOptions.programDesign;
+        const includeDesign = !!executedOpts.programDesign;
         if (!includeLegal && !includeDesign) return;
         const start = resolveServiceStart("programDesign", "Program Design", cursor);
         // Whichever side is genuinely contracted gets its normal, fresh-
@@ -1610,7 +1633,7 @@ function buildPhases(program) {
       // genuinely skipped; if any is selected, the normal calculated
       // chain still applies, since that's how the ISP contract would
       // actually get executed in the first place.
-      if (def.key === "deployment" && program.ispContractExecuted && !program.selectedOptions.rfp && !program.selectedOptions.incumbentNegotiation && !program.selectedOptions.programDesign) {
+      if (def.key === "deployment" && program.ispContractExecuted && !executedOpts.rfp && !executedOpts.incumbentNegotiation && !executedOpts.programDesign) {
         start = program.ispContractExecuted;
       }
       start = resolveServiceStart(def.optionKey, def.label, start);
@@ -1977,7 +2000,7 @@ function currentPhaseGroupLabel(property) {
 // Natural phase sequence, used to sort Group-by-Phase lanes in the order
 // work actually flows rather than alphabetically.
 const PHASE_GROUP_ORDER = [
-  "Prospecting", "Due Diligence", "Planning",
+  "Prospecting", "Advisory Contracts Drafted", "Due Diligence", "Planning",
   "Additional Services", "RFP Track", "Incumbent Negotiation Track", "Program Design & Contracting",
   "Deployment", "Post-Deployment Validation", "Ongoing Management"
 ];
@@ -4728,26 +4751,24 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
         <div className="field-label" style={{ marginBottom: 6 }}>Contracted services</div>
         <div className="contract-dates-list" style={{ marginBottom: 18 }}>
           {[["dueDiligence", "Due Diligence", "dueDiligence"], ["rfp", "RFP", "rfp"], ["programDesign", "Program Design", "programDesign"], ["deployment", "Deployment", "deployment"]].map(([optionKey, label, phaseKey]) => {
-            const selected = !!(program.selectedOptions && program.selectedOptions[optionKey]);
-            // The real, computed start date — from the actual phase
-            // sequence, whether that came from an explicit
-            // serviceContractDates override or the natural sequential
-            // chain — not just whatever's explicitly stored.
-            const realPhase = phases.find((p) => p.key === phaseKey);
-            const resolvedDate = realPhase ? realPhase.start : null;
-            const hasDate = selected && !!resolvedDate;
+            // The contract execution date for this specific service (its own
+            // date when added by amendment, else the advisory contract's
+            // execution date) — never a projected phase start.
+            const proposed = !!(program.selectedOptions && program.selectedOptions[optionKey]);
+            const executedDate = serviceExecutedDate(program, optionKey);
+            const draftOnly = proposed && !program.advisoryContractExecuted;
             return (
-              <div key={optionKey} className="contract-date-row" style={hasDate ? { borderColor: "#007B0C" } : undefined}>
+              <div key={optionKey} className="contract-date-row" style={executedDate ? { borderColor: "#007B0C" } : undefined}>
                 <span className="field-label">{label}</span>
-                <span className="mono">
-                  {selected ? (resolvedDate ? fmtDate(resolvedDate) : "Date pending") : "Not contracted"}
+                <span className="mono" style={draftOnly ? { color: STATUS_META["Advisory Contracts Drafted"].color } : undefined}>
+                  {executedDate ? `Executed ${fmtDate(executedDate)}` : draftOnly ? "In draft — not executed" : "Not contracted"}
                 </span>
               </div>
             );
           })}
         </div>
         <div className="dim" style={{ fontSize: 11, marginTop: -12, marginBottom: 18 }}>
-          Set automatically from the contract import — not manually editable here. Due Diligence, when contracted, is bundled into RFP and bills at $0.
+          Each date is that service's contract execution date (an amendment that adds a service carries its own date). Set from the contract import. Due Diligence, when contracted, is bundled into RFP and bills at $0.
         </div>
 
         <div className="contract-dates-list" style={{ marginBottom: 18 }}>
@@ -5109,7 +5130,7 @@ function PhaseModal({ property, phaseKey, onClose, onToggleTodo, onAddTodo, onTo
 
         {phaseKey === "advisory" && (
           <>
-            <div className="field-label">Contracted options</div>
+            <div className="field-label">{property.program.advisoryContractExecuted ? "Contracted options" : "Proposed options — contract drafted, not executed"}</div>
             <div className="chip-row" style={{ marginBottom: 18 }}>
               {OPTIONAL_PHASES.map((def) => (
                 <button
@@ -5122,7 +5143,7 @@ function PhaseModal({ property, phaseKey, onClose, onToggleTodo, onAddTodo, onTo
               ))}
             </div>
             <div className="dim" style={{ fontSize: 12, marginBottom: 18 }}>
-              Toggling an option reshapes the rest of this property's timeline immediately. Due Diligence fee is credited 100% if RFP is selected.
+              {property.program.advisoryContractExecuted ? "Toggling an option reshapes the rest of this property's timeline immediately." : "These services join the timeline once the advisory contract is executed."} Due Diligence fee is credited 100% if RFP is selected.
             </div>
           </>
         )}
@@ -7374,7 +7395,7 @@ function AdvisoryContractsView({ properties, onOpenProperty, supabaseClient, bil
       return {
         p, closed, executed, drafted: p.program.advisoryContractDrafted || null,
         client: a.Client || "", units, type: a["Project Type"] || "Retrofit",
-        services: AC_SERVICES.filter(([k]) => (p.program.selectedOptions || {})[k]).map(([, l, short]) => ({ l, short })),
+        services: AC_SERVICES.filter(([k]) => (p.program.selectedOptions || {})[k]).map(([, l, short]) => ({ l, short, draft: !executed })),
         fees: acOneTimeFees(p), status, statusFull,
         contractPath: p.program.contractPath || null, contractLink: p.program.contractLink || null,
       };
@@ -7446,7 +7467,7 @@ function AdvisoryContractsView({ properties, onOpenProperty, supabaseClient, bil
                   <td title={r.client} style={{ maxWidth: "clamp(110px, 10vw, 260px)", overflow: "hidden", textOverflow: "ellipsis" }}>{r.client || "—"}</td>
                   <td className="r">{r.units ? r.units.toLocaleString() : "—"}</td>
                   <td>{r.type}</td>
-                  <td>{r.services.length ? <div style={{ display: "flex", flexWrap: "nowrap", gap: 4 }}>{r.services.map((s) => <span key={s.l} className="t-chip" title={s.l}>{s.short}</span>)}</div> : <span style={{ color: "var(--mut)" }}>None selected</span>}</td>
+                  <td>{r.services.length ? <div style={{ display: "flex", flexWrap: "nowrap", gap: 4 }}>{r.services.map((s) => <span key={s.l} className="t-chip" title={s.draft ? `${s.l} — in draft, not executed` : s.l} style={s.draft ? { background: "transparent", border: "1px dashed #A78BFA", color: "#c9bdfc" } : undefined}>{s.short}</span>)}</div> : <span style={{ color: "var(--mut)" }}>None selected</span>}</td>
                   <td style={{ whiteSpace: "nowrap" }}>{r.drafted ? fmtDate(r.drafted) : "—"}</td>
                   <td style={{ whiteSpace: "nowrap" }}>{r.executed ? fmtDate(r.executed) : <span className="pill s-atrisk">Not yet</span>}</td>
                   <td className="r">{r.fees == null ? "—" : money(r.fees)}</td>
