@@ -2258,11 +2258,61 @@ function DashboardBarChart({ title, titleExtra, data, onBarClick, formatValue })
   );
 }
 
-// STUB — overdue logic to be provided later. Always false for now, so
-// nothing is ever marked overdue until real logic replaces this; every
-// "Overdue" figure below will correctly show as $0 until then.
-function isPaymentOverdueStub(half) {
-  return false;
+// Overdue = net 30: a payment is overdue once it has been invoiced, is not
+// yet paid, and more than 30 days have passed since its invoice date. The
+// same rule applies to Revenue Tracker lines (see rtEvaluate).
+const NET_TERMS_DAYS = 30;
+
+// Invoice date for a calculated-billing half: the date it was marked
+// Invoiced. Halves marked Invoiced before that date was recorded fall back
+// to the trigger date (when the payment became billable).
+function paymentInvoiceDate(half) {
+  const d = half && (half.invoicedDate || half.dueDate);
+  return typeof d === "string" && /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0, 10) : null;
+}
+
+function paymentDaysPastDue(half, asOf = TODAY) {
+  if (!half || half.status !== "Invoiced") return 0;
+  const d = paymentInvoiceDate(half);
+  if (!d) return 0;
+  return Math.max(0, rtDaysBetween(d, asOf) - NET_TERMS_DAYS);
+}
+
+function isPaymentOverdue(half, asOf = TODAY) {
+  return paymentDaysPastDue(half, asOf) > 0;
+}
+
+// Payment status buckets shared by the overview tiles and the Billing
+// status filter: pending, invoiced, overdue, paid. "due" = anything unpaid.
+function legacyHalfBucket(half) {
+  if (isPaymentOverdue(half)) return "overdue";
+  if (half.status === "Complete") return "paid";
+  if (half.status === "Invoiced") return "invoiced";
+  return "pending";
+}
+const RT_STATUS_BUCKET = { "Past due": "overdue", "Current": "invoiced", "Not invoiced": "pending", "Paid": "paid" };
+const BILLING_STATUS_FILTERS = [
+  { key: "all", label: "All statuses" },
+  { key: "due", label: "Payments due (unpaid)" },
+  { key: "pending", label: "Pending" },
+  { key: "invoiced", label: "Invoiced" },
+  { key: "overdue", label: "Overdue" },
+  { key: "paid", label: "Paid" },
+];
+function billingStatusMatches(filter, bucket) {
+  if (!filter || filter === "all") return true;
+  if (filter === "due") return bucket !== "paid";
+  return filter === bucket;
+}
+function BillingStatusSelect({ value, onChange }) {
+  return (
+    <label style={{ display: "flex", gap: 6, alignItems: "center", color: "var(--mut)", fontSize: 13 }}>
+      Status
+      <select value={value || "all"} onChange={(e) => onChange && onChange(e.target.value)} aria-label="Filter by payment status">
+        {BILLING_STATUS_FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+      </select>
+    </label>
+  );
 }
 
 const BILLING_PHASE_META = {
@@ -2403,11 +2453,12 @@ function rtEvaluate(rec, asOf, settings) {
   const isRovrBucket = rec.service_bucket.trim().toLowerCase() === String(s.rovrBucket).trim().toLowerCase();
   let rovr_paid = isRovrBucket ? rtRound2(rec.invoiced * Number(s.rovrRate)) : 0;
   if (s.gateRovrPaidOnPaymentDate && !rec.rovr_payment_date) rovr_paid = 0;
-  const monthStart = `${asOf.slice(0, 7)}-01`;
+  // Net 30: past due once more than NET_TERMS_DAYS have passed since the invoice date.
+  const daysSinceInvoice = rec.invoice_date ? rtDaysBetween(rec.invoice_date, asOf) : 0;
   let payment_status;
   if (rec.paid_date) payment_status = "Paid";
   else if (!rec.invoice_date) payment_status = "Not invoiced";
-  else if (rec.invoice_date < monthStart) payment_status = "Past due";
+  else if (daysSinceInvoice > NET_TERMS_DAYS) payment_status = "Past due";
   else payment_status = "Current";
   const past_due = payment_status === "Past due";
   return {
@@ -2416,7 +2467,7 @@ function rtEvaluate(rec, asOf, settings) {
     payment_status,
     past_due,
     past_due_amount: past_due ? rec.invoiced : 0,
-    days_past_due: past_due ? rtDaysBetween(rec.invoice_date, asOf) : 0,
+    days_past_due: past_due ? daysSinceInvoice - NET_TERMS_DAYS : 0,
     paid: payment_status === "Paid" ? rec.invoiced : 0,
     outstanding: payment_status === "Paid" ? 0 : rec.invoiced,
   };
@@ -2692,7 +2743,7 @@ function RevenueImportModal({ onClose, onSave, previous, properties }) {
   );
 }
 
-function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentStatus, onExport, billingImport, onSaveBillingImport }) {
+function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentStatus, onExport, billingImport, onSaveBillingImport, statusFilter, onStatusFilterChange }) {
   const [tab, setTab] = useState("totals");
   const [search, setSearch] = useState("");
   const [asOf, setAsOf] = useState(TODAY);
@@ -2709,6 +2760,8 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
   const scoped = tab === "totals" ? evaluated : evaluated.filter((r) => r.service_bucket.toLowerCase() === tabDef.bucket);
   const q = search.toLowerCase();
   const matches = (r) => !q || `${r.engagement_id} ${r.property} ${r.client_owner} ${r.yardi_code || ""} ${r.invoice_number || ""}`.toLowerCase().includes(q);
+  const statusOk = (r) => billingStatusMatches(statusFilter, RT_STATUS_BUCKET[r.payment_status]);
+  const shown = (r) => matches(r) && statusOk(r);
   const agg = useMemo(() => rtTotals(scoped), [scoped]);
   const tabsPresent = RT_TABS.filter((x) => evaluated.some((r) => r.service_bucket.toLowerCase() === x.bucket));
 
@@ -2734,7 +2787,7 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
     return (
       <div>
         <div className="proto-dash"><div className="wrap" style={{ paddingBottom: 0 }}><div className="foot" style={{ marginTop: 0 }}>Showing calculated billing. Once the Revenue Tracker is imported (Import / Export → Refresh Billing), this page switches to it.</div></div></div>
-        <LegacyBillingView properties={properties} onOpenProperty={onOpenProperty} onSetPaymentStatus={onSetPaymentStatus} onExport={onExport} />
+        <LegacyBillingView properties={properties} onOpenProperty={onOpenProperty} onSetPaymentStatus={onSetPaymentStatus} onExport={onExport} statusFilter={statusFilter} onStatusFilterChange={onStatusFilterChange} />
       </div>
     );
   }
@@ -2743,12 +2796,12 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
     return (
       <div>
         <div className="proto-dash"><div className="wrap" style={{ paddingBottom: 0 }}><button className="link" onClick={() => setLegacy(false)}>← Back to Revenue Tracker billing</button></div></div>
-        <LegacyBillingView properties={properties} onOpenProperty={onOpenProperty} onSetPaymentStatus={onSetPaymentStatus} onExport={onExport} />
+        <LegacyBillingView properties={properties} onOpenProperty={onOpenProperty} onSetPaymentStatus={onSetPaymentStatus} onExport={onExport} statusFilter={statusFilter} onStatusFilterChange={onStatusFilterChange} />
       </div>
     );
   }
 
-  const statusPill = (st, days) => <span className={`pill ${RT_STATUS_PILL[st]}`} title={st === "Past due" ? `${days} days since invoice` : st}>{RT_STATUS_LABEL[st]}{st === "Past due" && days ? ` · ${days}d` : ""}</span>;
+  const statusPill = (st, days) => <span className={`pill ${RT_STATUS_PILL[st]}`} title={st === "Past due" ? `${days} days past due (net 30)` : st}>{RT_STATUS_LABEL[st]}{st === "Past due" && days ? ` · ${days}d` : ""}</span>;
   const nameCell = (label, tracker, eid) => (
     <td className={`rt-wrap${tracker ? " click" : ""}`} onClick={tracker ? (ev) => { ev.stopPropagation(); onOpenProperty(tracker); } : undefined} style={tracker ? { cursor: "pointer" } : undefined}>
       <div>{label}</div><span className="id" style={tracker ? undefined : { opacity: 0.6 }}>{tracker ? tracker.code : eid}</span>
@@ -2798,6 +2851,7 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
 
             <div className="toolbar">
               <input type="text" placeholder="Search property, client, engagement ID or invoice #" value={search} onChange={(e) => setSearch(e.target.value)} style={{ minWidth: 320 }} aria-label="Search billing" />
+              <BillingStatusSelect value={statusFilter} onChange={onStatusFilterChange} />
               <span className="sp" />
               <button className="btn" onClick={() => rtExport("csv", imp, evaluated, asOf)}>Export CSV</button>
               <button className="btn" onClick={() => rtExport("json", imp, evaluated, asOf)}>Export JSON</button>
@@ -2808,9 +2862,9 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
                 <table className="rt-table">
                   <thead><tr><th>Property</th><th>Client</th><th className="r">Lines</th><th className="r">Total</th><th className="r">Paid</th><th className="r">Outstanding</th><th className="r">Greystar invoiced</th><th className="r">ROVR paid</th><th className="r">ROVR pending</th><th>Status</th></tr></thead>
                   <tbody>
-                    {propertyTotals.filter((x) => x.lines.some(matches)).length === 0 ? (
+                    {propertyTotals.filter((x) => x.lines.some(shown)).length === 0 ? (
                       <tr><td colSpan={10} style={{ color: "var(--mut)" }}>No properties match.</td></tr>
-                    ) : propertyTotals.filter((x) => x.lines.some(matches)).map((x) => (
+                    ) : propertyTotals.filter((x) => x.lines.some(shown)).map((x) => (
                       <tr key={x.key} className={x.tracker ? "click" : ""} onClick={x.tracker ? () => onOpenProperty(x.tracker) : undefined}>
                         {nameCell(x.property, x.tracker, x.key)}
                         <td className="rt-wrap">{x.client || "—"}</td>
@@ -2830,9 +2884,9 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
                 <table className="rt-table">
                   <thead><tr><th>Property</th><th>Client</th><th>Milestone</th><th>Invoice #</th><th>Invoice date</th><th>Paid date</th><th className="r">Total</th><th className="r">Paid</th><th className="r">Outstanding</th><th className="r">Greystar invoiced</th><th className="r">ROVR paid</th><th className="r">ROVR pending</th><th>Status</th></tr></thead>
                   <tbody>
-                    {scoped.filter(matches).length === 0 ? (
+                    {scoped.filter(shown).length === 0 ? (
                       <tr><td colSpan={13} style={{ color: "var(--mut)" }}>No billing lines match.</td></tr>
-                    ) : scoped.filter(matches).map((r) => {
+                    ) : scoped.filter(shown).map((r) => {
                       const tracker = findProperty(r);
                       return (
                         <tr key={r.source_row} title={r.warnings.length ? r.warnings.join("\n") : `Source row ${r.source_row}`}>
@@ -2857,7 +2911,7 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
               )}
             </div>
             <div className="foot">
-              Paid = a Paid Date is filled. Overdue = invoiced before {fmtDate(`${asOf.slice(0, 7)}-01`)} and not paid. Invoiced = invoiced this month, not yet paid. Pending = not invoiced.
+              Paid = a Paid Date is filled. Overdue = not paid and more than {NET_TERMS_DAYS} days past the invoice date (net {NET_TERMS_DAYS}). Invoiced = invoiced within the last {NET_TERMS_DAYS} days, not yet paid. Pending = not invoiced.
               ROVR paid is {Math.round(Number({ ...RT_DEFAULT_SETTINGS, ...(imp.settings || {}) }.rovrRate) * 100)}% of {({ ...RT_DEFAULT_SETTINGS, ...(imp.settings || {}) }).rovrBucket} invoices; ROVR pending is Estimated AP Cost (T). The two overlap on RFP lines, so don't add them together.
               {" "}{agg.warning_rows > 0 && <button className="link" onClick={() => setShowWarnings((v) => !v)}>{showWarnings ? "Hide" : "Show"} {agg.warning_rows} lines with import warnings</button>}
             </div>
@@ -2880,7 +2934,7 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
 
 
 // Previous calculated billing (per-unit fee schedule), kept behind a link on the Billing page.
-function LegacyBillingView({ properties, onOpenProperty, onSetPaymentStatus, onExport }) {
+function LegacyBillingView({ properties, onOpenProperty, onSetPaymentStatus, onExport, statusFilter, onStatusFilterChange }) {
   const [tab, setTab] = useState("totals");
   const [search, setSearch] = useState("");
 
@@ -2917,11 +2971,12 @@ function LegacyBillingView({ properties, onOpenProperty, onSetPaymentStatus, onE
   const propertyTotals = useMemo(() => {
     const byProperty = new Map();
     scopedRows.forEach((r) => {
-      if (!byProperty.has(r.property.id)) byProperty.set(r.property.id, { property: r.property, total: 0, paid: 0, outstanding: 0, nextStatus: "Complete", phaseKeys: [] });
+      if (!byProperty.has(r.property.id)) byProperty.set(r.property.id, { property: r.property, total: 0, paid: 0, outstanding: 0, nextStatus: "Complete", phaseKeys: [], buckets: [] });
       const entry = byProperty.get(r.property.id);
       entry.phaseKeys.push(r.phaseKey);
       [r.firstHalf, r.secondHalf].forEach((h) => {
         entry.total += h.amount;
+        entry.buckets.push(legacyHalfBucket(h));
         if (h.status === "Complete") entry.paid += h.amount; else entry.outstanding += h.amount;
         const rank = { Pending: 0, Invoiced: 1, Complete: 2 };
         if (rank[h.status] < rank[entry.nextStatus]) entry.nextStatus = h.status;
@@ -2931,8 +2986,11 @@ function LegacyBillingView({ properties, onOpenProperty, onSetPaymentStatus, onE
   }, [scopedRows]);
 
   const q = search.toLowerCase();
-  const filteredTotals = propertyTotals.filter((x) => !q || `${x.property.name} ${x.property.program.attributes.Client || ""} ${x.property.code}`.toLowerCase().includes(q));
-  const filteredPhaseRows = scopedRows.filter((r) => !q || `${r.property.name} ${r.property.program.attributes.Client || ""} ${r.property.code}`.toLowerCase().includes(q));
+  // Status filter (from the overview tiles or the Status dropdown): keep a property or phase row if any of its halves is in that status.
+  const filteredTotals = propertyTotals.filter((x) => (!q || `${x.property.name} ${x.property.program.attributes.Client || ""} ${x.property.code}`.toLowerCase().includes(q))
+    && x.buckets.some((b) => billingStatusMatches(statusFilter, b)));
+  const filteredPhaseRows = scopedRows.filter((r) => (!q || `${r.property.name} ${r.property.program.attributes.Client || ""} ${r.property.code}`.toLowerCase().includes(q))
+    && [r.firstHalf, r.secondHalf].some((h) => billingStatusMatches(statusFilter, legacyHalfBucket(h))));
 
   // Aggregate KPIs for whatever's currently in scope (totals or one phase)
   const agg = useMemo(() => {
@@ -2940,7 +2998,7 @@ function LegacyBillingView({ properties, onOpenProperty, onSetPaymentStatus, onE
     scopedRows.forEach((r) => {
       [r.firstHalf, r.secondHalf].forEach((h) => {
         total += h.amount;
-        const isOverdue = isPaymentOverdueStub(h);
+        const isOverdue = isPaymentOverdue(h);
         if (isOverdue) overdue += h.amount;
         else if (h.status === "Complete") paid += h.amount;
         else if (h.status === "Invoiced") invoiced += h.amount;
@@ -3008,6 +3066,7 @@ function LegacyBillingView({ properties, onOpenProperty, onSetPaymentStatus, onE
 
         <div className="toolbar">
           <input type="text" placeholder="Search by property or client" value={search} onChange={(e) => setSearch(e.target.value)} style={{ minWidth: 260 }} aria-label="Search billing" />
+          <BillingStatusSelect value={statusFilter} onChange={onStatusFilterChange} />
           <span className="sp" />
           <button className="btn" onClick={onExport}>Export</button>
         </div>
@@ -3021,7 +3080,8 @@ function LegacyBillingView({ properties, onOpenProperty, onSetPaymentStatus, onE
                   <tr><td colSpan={7} style={{ color: "var(--mut)" }}>No properties match.</td></tr>
                 ) : (
                   filteredTotals.map((x) => {
-                    const pillClass = x.nextStatus === "Complete" ? "p-Paid" : x.nextStatus;
+                    const anyOverdue = x.buckets.includes("overdue");
+                    const pillClass = anyOverdue ? "p-Overdue" : x.nextStatus === "Complete" ? "p-Paid" : x.nextStatus;
                     return (
                       <tr key={x.property.id} className="click" onClick={() => onOpenProperty(x.property)}>
                         <td><span className="id">{x.property.code}</span> {x.property.name}</td>
@@ -3030,7 +3090,7 @@ function LegacyBillingView({ properties, onOpenProperty, onSetPaymentStatus, onE
                         <td className="r">{money(x.total)}</td>
                         <td className="r">{money(x.paid)}</td>
                         <td className="r">{money(x.outstanding)}</td>
-                        <td><span className={`pill ${pillClass}`}>{x.nextStatus === "Complete" ? "Paid" : x.nextStatus}</span></td>
+                        <td><span className={`pill ${pillClass}`}>{anyOverdue ? "Overdue" : x.nextStatus === "Complete" ? "Paid" : x.nextStatus}</span></td>
                       </tr>
                     );
                   })
@@ -3049,7 +3109,8 @@ function LegacyBillingView({ properties, onOpenProperty, onSetPaymentStatus, onE
                   ) : (
                     filteredPhaseRows.map((r) => {
                       const overallStatus = [r.firstHalf, r.secondHalf].every((h) => h.status === "Complete") ? "Complete" : ([r.firstHalf, r.secondHalf].find((h) => h.status !== "Complete") || {}).status || "Pending";
-                      const pillClass = overallStatus === "Complete" ? "p-Paid" : overallStatus;
+                      const rowOverdue = [r.firstHalf, r.secondHalf].some((h) => isPaymentOverdue(h));
+                      const pillClass = rowOverdue ? "p-Overdue" : overallStatus === "Complete" ? "p-Paid" : overallStatus;
                       return (
                         <tr key={r.property.id + r.phaseKey}>
                           <td className="click" onClick={() => onOpenProperty(r.property)} style={{ cursor: "pointer" }}><span className="id">{r.property.code}</span> {r.property.name}</td>
@@ -3063,13 +3124,13 @@ function LegacyBillingView({ properties, onOpenProperty, onSetPaymentStatus, onE
                               <select value={h.status} onChange={(e) => onSetPaymentStatus(r.property.id, h.key, e.target.value)} aria-label="Payment status">
                                 <option>Pending</option><option>Invoiced</option><option value="Complete">Paid</option>
                               </select>
-                              {isPaymentOverdueStub(h) && <span className="pill p-Overdue" style={{ marginLeft: 4 }}>Overdue</span>}
+                              {isPaymentOverdue(h) && <span className="pill p-Overdue" style={{ marginLeft: 4 }} title={`Invoiced ${fmtDate(paymentInvoiceDate(h))}, net ${NET_TERMS_DAYS}`}>Overdue · {paymentDaysPastDue(h)}d</span>}
                             </td>
                           ))}
                           {[r.firstHalf, r.secondHalf].map((h, i) => (
                             <td key={"rv" + i}>{h.rovrAmountDue != null ? <>{money(h.rovrAmountDue)}<small>Due {h.dueDate ? fmtDate(h.dueDate) : "—"}</small></> : "—"}</td>
                           ))}
-                          <td><span className={`pill ${pillClass}`}>{overallStatus === "Complete" ? "Paid" : overallStatus}</span></td>
+                          <td><span className={`pill ${pillClass}`}>{rowOverdue ? "Overdue" : overallStatus === "Complete" ? "Paid" : overallStatus}</span></td>
                         </tr>
                       );
                     })
@@ -3077,7 +3138,7 @@ function LegacyBillingView({ properties, onOpenProperty, onSetPaymentStatus, onE
                 </tbody>
               </table>
             </div>
-            <div className="foot">Rate is $10 per unit for retrofit and $15 per unit for new construction (floor $3,000, ceiling varies by project type). The 2nd half is the total minus the 1st half. Status shown is the least-advanced unpaid half, or Paid once both halves are complete. Overdue means invoiced and past the due date.</div>
+            <div className="foot">Rate is $10 per unit for retrofit and $15 per unit for new construction (floor $3,000, ceiling varies by project type). The 2nd half is the total minus the 1st half. Status shown is the least-advanced unpaid half, or Paid once both halves are complete. Overdue means invoiced, not paid, and more than {NET_TERMS_DAYS} days past the invoice date (net {NET_TERMS_DAYS}); lines marked Invoiced before invoice dates were recorded count from their trigger date.</div>
           </>
         )}
 
@@ -3529,7 +3590,7 @@ function PropertiesView({ properties, onOpenProperty, callNotes, search, setSear
   );
 }
 
-function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, onOpenExecutedContracts, onOpenExecutedContractsForProperty, stakeholderCounts, onOpenStakeholder, callNotes, billingImport }) {
+function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, onOpenExecutedContracts, onOpenExecutedContractsForProperty, onOpenBilling, stakeholderCounts, onOpenStakeholder, callNotes, billingImport }) {
   const money = (n) => `$${Math.round(n).toLocaleString()}`;
 
   // KPI status row — same computeStatus/STATUS_META data the app-wide
@@ -3556,6 +3617,8 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
     const source = (allProperties || properties).filter((p) => p.program.advisoryContractExecuted);
     let pending = 0, invoiced = 0, paid = 0, overdue = 0;
     let rovrPaid = 0, rovrPending = 0;
+    // Properties with any unpaid amount — the same set the Payments due dollar figure covers.
+    const unpaidPropertyIds = new Set();
     const owed = { greystar: { pending: 0, invoiced: 0, overdue: 0 }, rovr: { pending: 0, invoiced: 0, overdue: 0 } };
     source.forEach((p) => {
       const opts = p.program.selectedOptions || {};
@@ -3565,7 +3628,8 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
         .forEach(([phaseKey, selected, feeObj]) => {
           if (!selected || !feeObj || feeObj.credited) return;
           [feeObj.firstHalf, feeObj.secondHalf].forEach((h) => {
-            const overdueNow = isPaymentOverdueStub(h);
+            if (h.status !== "Complete" && h.amount > 0) unpaidPropertyIds.add(p.id);
+            const overdueNow = isPaymentOverdue(h);
             if (overdueNow) overdue += h.amount;
             else if (h.status === "Complete") paid += h.amount;
             else if (h.status === "Invoiced") invoiced += h.amount;
@@ -3604,7 +3668,7 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
       if (d.monthsSinceStart != null) deploymentVariance += Math.max(0, d.monthsSinceStart * d.monthlyTotal - collected);
     });
 
-    return { pending, invoiced, paid, overdue, rovrPaid, rovrPending, owed, oneTimeTotal: tcv.oneTimeTotal, projectedDeploymentValue: tcv.projectedDeploymentValue, assumedContractMonths, totalContractValue: tcv.totalContractValue, deploymentCollectedToDate, deploymentVariance };
+    return { pending, invoiced, paid, overdue, unpaidProperties: unpaidPropertyIds.size, rovrPaid, rovrPending, owed, oneTimeTotal: tcv.oneTimeTotal, projectedDeploymentValue: tcv.projectedDeploymentValue, assumedContractMonths, totalContractValue: tcv.totalContractValue, deploymentCollectedToDate, deploymentVariance };
   }, [properties, allProperties]);
 
   // Last Note by Property — newest call_notes digest entry per
@@ -3696,8 +3760,11 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
     const ev = billingImport.records.map((r) => rtEvaluate(r, TODAY, billingImport.settings));
     const t = rtTotals(ev);
     const owed = { greystar: { pending: 0, invoiced: 0, overdue: 0 }, rovr: { pending: 0, invoiced: 0, overdue: 0 } };
+    // Properties with any unpaid line — the same set the Payments due dollar figure covers.
+    const unpaidKeys = new Set();
     ev.forEach((r) => {
       if (r.payment_status === "Paid") return;
+      if (r.invoiced > 0) unpaidKeys.add(rtBaseId(r.engagement_id));
       const bucket = r.payment_status === "Past due" ? "overdue" : r.payment_status === "Current" ? "invoiced" : "pending";
       const rv = Math.max(0, Math.min(r.rovr_pending, r.invoiced));
       owed.rovr[bucket] += rv; owed.greystar[bucket] += r.invoiced - rv;
@@ -3712,7 +3779,7 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
       const e = byP.get(p.id); e.total += r.invoiced; e.count += 1;
     });
     return {
-      summary: { pending: t.not_invoiced, invoiced: t.current, paid: t.paid, overdue: t.past_due, rovrPaid: t.rovr_paid, rovrPending: t.rovr_pending, owed },
+      summary: { pending: t.not_invoiced, invoiced: t.current, paid: t.paid, overdue: t.past_due, unpaidProperties: unpaidKeys.size, rovrPaid: t.rovr_paid, rovrPending: t.rovr_pending, owed },
       payments: [...byP.values()].sort((a, b) => b.total - a.total),
       unmatched, source: billingImport.source_file || "Revenue Tracker", importedAt: billingImport.imported_at || null,
     };
@@ -3785,10 +3852,22 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
 
         <div className="sec">Billing{importBilling && <span style={{ fontWeight: 400 }}> · from {importBilling.source}{importBilling.importedAt ? `, imported ${fmtDate(importBilling.importedAt.slice(0, 10))}` : ""}</span>}</div>
         <div className="kpis">
-          <div className="kpi"><div className="v c-a">{money(unpaidTotal)}</div><div className="k">Payments due</div><div className="n">{paymentsDueSummary.properties} properties</div></div>
-          <div className="kpi"><div className="v c-b">{money(billingSummary.invoiced)}</div><div className="k">Invoiced</div></div>
-          <div className="kpi"><div className="v c-g">{money(billingSummary.paid)}</div><div className="k">Paid</div></div>
-          <div className="kpi"><div className="v c-r">{money(billingSummary.overdue)}</div><div className="k">Overdue</div></div>
+          <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("due")} title="Open Billing: all unpaid payments">
+            <div className="v c-a">{money(unpaidTotal)}</div><div className="k">Payments due</div>
+            <div className="n">{billingSummary.unpaidProperties || 0} {billingSummary.unpaidProperties === 1 ? "property" : "properties"} · Pending + Invoiced + Overdue</div>
+          </button>
+          <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("pending")} title="Open Billing: Pending (not yet invoiced)">
+            <div className="v">{money(billingSummary.pending)}</div><div className="k">Pending</div><div className="n">Not yet invoiced</div>
+          </button>
+          <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("invoiced")} title="Open Billing: Invoiced, within net 30">
+            <div className="v c-b">{money(billingSummary.invoiced)}</div><div className="k">Invoiced</div><div className="n">Within net {NET_TERMS_DAYS}</div>
+          </button>
+          <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("overdue")} title="Open Billing: Overdue">
+            <div className="v c-r">{money(billingSummary.overdue)}</div><div className="k">Overdue</div><div className="n">Over {NET_TERMS_DAYS} days since invoice</div>
+          </button>
+          <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("paid")} title="Open Billing: Paid">
+            <div className="v c-g">{money(billingSummary.paid)}</div><div className="k">Paid</div><div className="n">Collected, not in Payments due</div>
+          </button>
         </div>
 
         <div className="card" style={{ marginTop: 14 }}>
@@ -6021,9 +6100,11 @@ function computeAdvisoryBilling(property) {
   // kept as its own, separate, automatic signal (still shown via the
   // trigger/date columns, still what credit logic and the Payments Due
   // alert actually need), completely independent of status now.
+  // Date each half was marked Invoiced (set by setPaymentStatus); drives net 30 overdue.
+  const invoicedDates = property.program.paymentInvoicedDates || {};
   const halfFields = (phaseKey, key, naturallyDone, amount) => {
     const status = overrides[key] || "Pending";
-    return { status, done: naturallyDone, manual: !!overrides[key], ...rovrFields(phaseKey, key, status === "Complete", amount) };
+    return { status, done: naturallyDone, manual: !!overrides[key], invoicedDate: invoicedDates[key] || null, ...rovrFields(phaseKey, key, status === "Complete", amount) };
   };
 
   const ddExecuted = (property.program.serviceContractDates && property.program.serviceContractDates.rfp) || contractExecuted;
@@ -8327,6 +8408,8 @@ function App() {
   };
   const [isolatedKey, setIsolatedKey] = useState(null);
   const [view, setView] = useState("home");
+  // Payment status filter on the Billing page; set by the overview billing tiles.
+  const [billingStatus, setBillingStatus] = useState("all");
   const [search, setSearch] = useState("");
   const [showClosed, setShowClosed] = useState(false);
   const [showProspecting, setShowProspecting] = useState(true);
@@ -8609,7 +8692,15 @@ function App() {
   };
 
   const setPaymentStatus = (propertyId, key, status) => {
-    setProperties((prev) => prev.map((p) => p.id !== propertyId ? p : { ...p, program: { ...p.program, manualPaymentOverrides: { ...(p.program.manualPaymentOverrides || {}), [key]: status } } }));
+    setProperties((prev) => prev.map((p) => {
+      if (p.id !== propertyId) return p;
+      // Record the invoice date the first time a half is marked Invoiced
+      // (net 30 overdue counts from it); clear it if moved back to Pending.
+      const invoicedDates = { ...(p.program.paymentInvoicedDates || {}) };
+      if (status === "Invoiced") { if (!invoicedDates[key]) invoicedDates[key] = TODAY; }
+      else if (status === "Pending") delete invoicedDates[key];
+      return { ...p, program: { ...p.program, manualPaymentOverrides: { ...(p.program.manualPaymentOverrides || {}), [key]: status }, paymentInvoicedDates: invoicedDates } };
+    }));
   };
   const setManualStatus = (status) => {
     setProperties((prev) => prev.map((p) => p.id !== programPropertyId ? p : { ...p, program: { ...p.program, manualStatus: status } }));
@@ -8898,7 +8989,7 @@ function App() {
               ["contracts", "Advisory Contracts", FileText, "#3cc8c0"],
               ["map", "Client Map", MapIcon, "#5fb3f0"],
             ].map(([key, label, Icon, color]) => (
-              <button key={key} className={view === key ? "active" : ""} style={{ "--hc": color }} onClick={() => setView(key)} aria-current={view === key ? "page" : undefined}>
+              <button key={key} className={view === key ? "active" : ""} style={{ "--hc": color }} onClick={() => { if (key === "billing") setBillingStatus("all"); setView(key); }} aria-current={view === key ? "page" : undefined}>
                 <Icon size={14} /> {label}
               </button>
             ))}
@@ -8924,8 +9015,9 @@ function App() {
             allProperties={properties}
             onNavigate={(groupByKey, label) => setView("timeline")}
             onOpenProperty={(p) => openProgram(p)}
-            onOpenExecutedContracts={() => setView("billing")}
-            onOpenExecutedContractsForProperty={(p) => { setView("billing"); openProgram(p); }}
+            onOpenExecutedContracts={() => { setBillingStatus("all"); setView("billing"); }}
+            onOpenExecutedContractsForProperty={(p) => { setBillingStatus("all"); setView("billing"); openProgram(p); }}
+            onOpenBilling={(status) => { setBillingStatus(status || "all"); setView("billing"); }}
             stakeholderCounts={stakeholderCounts}
             onOpenStakeholder={(s) => setQueueStakeholder(s)}
             callNotes={callNotes}
@@ -8937,7 +9029,7 @@ function App() {
         <TimelineView properties={visible} onOpenProperty={(p) => openProgram(p)} />
       )}
       {view === "billing" && (
-        <BillingView properties={visible} allProperties={properties} onOpenProperty={(p) => openProgram(p)} onSetPaymentStatus={setPaymentStatus} onExport={exportMasterFile} billingImport={billingImport} onSaveBillingImport={saveBillingImport} />
+        <BillingView properties={visible} allProperties={properties} onOpenProperty={(p) => openProgram(p)} onSetPaymentStatus={setPaymentStatus} onExport={exportMasterFile} billingImport={billingImport} onSaveBillingImport={saveBillingImport} statusFilter={billingStatus} onStatusFilterChange={setBillingStatus} />
       )}
       {view === "contracts" && (
         <AdvisoryContractsView properties={properties} onOpenProperty={(p) => openProgram(p)} supabaseClient={supabaseClient} billingImport={billingImport} />
