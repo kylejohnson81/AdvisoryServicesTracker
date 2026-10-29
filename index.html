@@ -8343,6 +8343,7 @@ function App() {
   // Real sign-in — email magic link only. Nothing renders below until a real session
   // exists, since the RLS policies require an authenticated user anyway.
   const [session, setSession] = useState(undefined); // undefined = still checking, null = signed out, object = signed in
+  const sessionUserId = session && session.user ? session.user.id : null;
   // Distinguishes "just signed out on purpose" from "never signed in yet" —
   // without this, both look identical and land on the same sign-in screen
   // with no acknowledgment that signing out actually did something.
@@ -8408,6 +8409,30 @@ function App() {
       setDataSyncStatus("shared");
 
       // Live updates from everyone else, from this point forward.
+      // Drop any channels left from an earlier run first; adding callbacks to an
+      // already-subscribed channel throws and leaves duplicate listeners behind.
+      const LIVE_TOPICS = ["realtime:properties-changes", "realtime:app-state-changes", "realtime:call-notes-changes"];
+      await Promise.all(supabaseClient.getChannels().filter((ch) => LIVE_TOPICS.includes(ch.topic)).map((ch) => supabaseClient.removeChannel(ch)));
+
+      // One save writes every property row, so one change arrives as a burst of
+      // notifications (one per row). Coalesce a burst into a single refetch
+      // instead of reloading the whole list once per row.
+      let refetchTimer = null, refetching = false, refetchAgain = false;
+      const refetchProperties = () => {
+        if (refetching) { refetchAgain = true; return; }
+        refetching = true;
+        supabaseClient.from("properties").select("*").order("id").then(({ data }) => {
+          // Same guards as below, re-checked now that the data is back.
+          if (data && pendingWriteCount.current === 0 && JSON.stringify(propertiesRef.current) === lastKnownPropertiesJSON.current) {
+            const mapped = data.map((row) => ({ id: row.id, code: row.code, name: row.name, program: row.program }));
+            lastKnownPropertiesJSON.current = JSON.stringify(mapped);
+            setProperties(mapped);
+          }
+        }).finally(() => {
+          refetching = false;
+          if (refetchAgain) { refetchAgain = false; clearTimeout(refetchTimer); refetchTimer = setTimeout(refetchProperties, 800); }
+        });
+      };
       supabaseClient
         .channel("properties-changes")
         .on("postgres_changes", { event: "*", schema: "public", table: "properties" }, () => {
@@ -8427,13 +8452,8 @@ function App() {
           // the pending local write proceed on its own; this refetch
           // logic will run again on the next real change regardless.
           if (JSON.stringify(propertiesRef.current) !== lastKnownPropertiesJSON.current) return;
-          supabaseClient.from("properties").select("*").order("id").then(({ data }) => {
-            if (data) {
-              const mapped = data.map((row) => ({ id: row.id, code: row.code, name: row.name, program: row.program }));
-              lastKnownPropertiesJSON.current = JSON.stringify(mapped);
-              setProperties(mapped);
-            }
-          });
+          clearTimeout(refetchTimer);
+          refetchTimer = setTimeout(refetchProperties, 800);
         })
         .subscribe();
 
@@ -8447,16 +8467,22 @@ function App() {
         })
         .subscribe();
 
+      let callNotesTimer = null;
       supabaseClient
         .channel("call-notes-changes")
         .on("postgres_changes", { event: "*", schema: "public", table: "call_notes" }, () => {
-          supabaseClient.from("call_notes").select("*").order("digest_date", { ascending: false }).then(({ data }) => {
-            if (data) setCallNotes(data);
-          });
+          clearTimeout(callNotesTimer);
+          callNotesTimer = setTimeout(() => {
+            supabaseClient.from("call_notes").select("*").order("digest_date", { ascending: false }).then(({ data }) => {
+              if (data) setCallNotes(data);
+            });
+          }, 800);
         })
         .subscribe();
     })();
-  }, [session]);
+    // Keyed to the signed-in user, not the session object: a token refresh hands
+    // back a new session object, which used to reload everything and re-subscribe.
+  }, [sessionUserId]);
 
   useEffect(() => {
     if (!supabaseClient || dataSyncStatus === "loading") return;
