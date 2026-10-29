@@ -864,17 +864,18 @@ tr.taskrow>td{background:#0f1c3f;padding:14px 16px 16px 46px}
         .cmap-pin.big:hover .dot { r: 11; }
         .cmap-pin-label { fill: var(--ink); font-size: 11px; text-anchor: middle; pointer-events: none; paint-order: stroke; stroke: var(--bg); stroke-width: 3px; }
         .cmap-state:hover { filter: brightness(1.18); }
-        .cmap-state.lg-active { fill: rgba(244,160,90,0.36); stroke: rgba(244,160,90,0.85); }
-        .cmap-state.lg-access { fill: rgba(244,160,90,0.13); stroke: rgba(244,160,90,0.45); }
+        .cmap-state.lg-active { fill: color-mix(in srgb, var(--panel) 55%, #f4a05a); stroke: rgba(244,160,90,0.9); }
+        .cmap-state.lg-access { fill: color-mix(in srgb, var(--panel) 84%, #f4a05a); stroke: rgba(244,160,90,0.5); }
         .cmap-state.dim { opacity: 0.35; }
-        .cmap-state.sel { stroke: #f4a05a; stroke-width: 1.6; }
+        .cmap-state.sel, .cmap-state.sel.lg-active, .cmap-state.sel.lg-access { fill: color-mix(in srgb, var(--panel) 90%, #f4a05a); stroke: #f4a05a; stroke-width: 1.6; }
+        .cmap-state.sel:hover { filter: none; }
         .cmap-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
         .cmap-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); cursor: pointer; }
         .cmap-back { font-size: 14px; margin-right: 6px; }
         .cmap-lg-key { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink); padding: 4px 6px; }
         .cmap-lg-key .box { width: 14px; height: 10px; border-radius: 2px; border: 1px solid rgba(244,160,90,0.85); }
-        .cmap-lg-key .box.active { background: rgba(244,160,90,0.45); }
-        .cmap-lg-key .box.access { background: rgba(244,160,90,0.15); border-color: rgba(244,160,90,0.45); }
+        .cmap-lg-key .box.active { background: color-mix(in srgb, var(--panel) 55%, #f4a05a); }
+        .cmap-lg-key .box.access { background: color-mix(in srgb, var(--panel) 84%, #f4a05a); border-color: rgba(244,160,90,0.5); }
         .cmap-states { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
         .cmap-states button { all: unset; cursor: pointer; font-size: 12px; padding: 3px 9px; border-radius: 99px; color: var(--ink); border: 1px solid rgba(244,160,90,0.7); background: rgba(244,160,90,0.18); }
         .cmap-states button.access { border-color: rgba(244,160,90,0.35); background: transparent; color: var(--ink-muted); }
@@ -8139,8 +8140,11 @@ function LegislationPanel({ stateCode, items, onSaveItems, userEmail }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState(null);
   const mine = items.filter((x) => x.state === stateCode);
-  const groups = LEGIS_LEVELS.map((lv) => [lv, mine.filter((x) => (x.level || "State") === lv)]).filter(([, xs]) => xs.length);
   const order = { High: 0, Medium: 1, Low: 2 };
+  // Groups (statewide / city / county) ordered by their most significant measure.
+  const best = (xs) => Math.min(...xs.map((x) => order[x.impact] ?? 3));
+  const groups = LEGIS_LEVELS.map((lv) => [lv, mine.filter((x) => (x.level || "State") === lv)]).filter(([, xs]) => xs.length)
+    .sort((a, b) => best(a[1]) - best(b[1]));
   const save = async (next) => {
     setSaving(true); setErr(null);
     try { await onSaveItems(next); setEditing(null); } catch (e) { setErr(e.message || String(e)); }
