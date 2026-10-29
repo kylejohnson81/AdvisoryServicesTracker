@@ -3856,8 +3856,8 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
             <div className="v c-a">{money(unpaidTotal)}</div><div className="k">Payments due</div>
             <div className="n">{billingSummary.unpaidProperties || 0} {billingSummary.unpaidProperties === 1 ? "property" : "properties"} · Pending + Invoiced + Overdue</div>
           </button>
-          <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("pending")} title="Open Billing: Pending (not yet invoiced)">
-            <div className="v">{money(billingSummary.pending)}</div><div className="k">Pending</div><div className="n">Not yet invoiced</div>
+          <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("pending")} title="Open Billing: Pending (contracted, future services)">
+            <div className="v">{money(billingSummary.pending)}</div><div className="k">Pending</div><div className="n">Contracted, future services</div>
           </button>
           <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("invoiced")} title="Open Billing: Invoiced, within net 30">
             <div className="v c-b">{money(billingSummary.invoiced)}</div><div className="k">Invoiced</div><div className="n">Within net {NET_TERMS_DAYS}</div>
