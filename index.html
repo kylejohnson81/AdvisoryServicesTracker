@@ -2469,8 +2469,8 @@ const BILLING_PHASE_META = {
    it moves on by itself as months turn over.
 --------------------------------------------------------- */
 const RT_STATE_KEY = "revenueTrackerImport";
-const RT_DEFAULT_SETTINGS = { rovrRate: 0.6, rovrBucket: "RFP Services", gateRovrPaidOnPaymentDate: false };
-const RT_CRITICAL_HEADERS = { A: "engagement id", G: "service bucket", P: "invoice amount", T: "estimated ap cost", V: "invoice date", W: "paid date" };
+const RT_DEFAULT_SETTINGS = { rovrRate: 0.6, rovrBucket: "RFP Services", gateRovrPaidOnPaymentDate: false, statusFilter: "Invoiced" };
+const RT_CRITICAL_HEADERS = { A: "engagement id", G: "service bucket", I: "status", P: "invoice amount", T: "estimated ap cost", V: "invoice date", W: "paid date" };
 const RT_TABS = [
   { key: "rfp", bucket: "rfp services", label: "RFP Track" },
   { key: "pd", bucket: "program design / contract oversight", label: "Program Design & Contracting" },
@@ -2567,6 +2567,23 @@ function rtParseRows(rows, opts) {
   records.forEach((rec) => { const k = `${rec.engagement_id}|${rec.service_bucket}|${rec.billing_milestone}`.toLowerCase(); seen.set(k, (seen.get(k) || 0) + 1); });
   records.forEach((rec) => { const k = `${rec.engagement_id}|${rec.service_bucket}|${rec.billing_milestone}`.toLowerCase(); if (seen.get(k) > 1) rec.warnings.push("Duplicate Engagement ID + Service Bucket + Billing Milestone; kept as a separate line (see source row)."); });
   return { blocking: [], records, headerRow: h + 1, sourceFile, sheetName };
+}
+
+// Status filter (spec 2): only rows whose Status (column I) matches the
+// statusFilter setting are imported (case-insensitive, trimmed). A blank
+// setting imports every row. Skipped rows are counted by status, and any
+// skipped row that already carries an Invoice Date is listed by name.
+function rtApplyStatusFilter(records, settings) {
+  const want = String(({ ...RT_DEFAULT_SETTINGS, ...(settings || {}) }).statusFilter || "").trim().toLowerCase();
+  if (!want) return { records, skippedByStatus: {}, skippedCount: 0, skippedWithInvoiceDate: [] };
+  const kept = [], skippedByStatus = {}, skippedWithInvoiceDate = [];
+  records.forEach((r) => {
+    if (String(r.tracker_status || "").trim().toLowerCase() === want) { kept.push(r); return; }
+    const k = r.tracker_status || "(blank)";
+    skippedByStatus[k] = (skippedByStatus[k] || 0) + 1;
+    if (r.invoice_date) skippedWithInvoiceDate.push(r);
+  });
+  return { records: kept, skippedByStatus, skippedCount: records.length - kept.length, skippedWithInvoiceDate };
 }
 
 // Reads a File with SheetJS (window.XLSX, already loaded for Import / Export).
@@ -2877,13 +2894,14 @@ function RevenueImportModal({ onClose, onSave, previous, properties }) {
     try { setParsed(await rtReadWorkbook(f)); } catch (x) { setErr(x.message); }
     setBusy(false);
   };
-  const evaluated = useMemo(() => parsed && !parsed.blocking.length ? parsed.records.map((r) => rtEvaluate(r, asOf, settings)) : [], [parsed, asOf, settings]);
+  const filtered = useMemo(() => parsed && !parsed.blocking.length ? rtApplyStatusFilter(parsed.records, settings) : { records: [], skippedByStatus: {}, skippedCount: 0, skippedWithInvoiceDate: [] }, [parsed, settings]);
+  const evaluated = useMemo(() => filtered.records.map((r) => rtEvaluate(r, asOf, settings)), [filtered, asOf, settings]);
   const t = useMemo(() => rtTotals(evaluated), [evaluated]);
   const checks = useMemo(() => rtContractChecks(evaluated, properties || []), [evaluated, properties]);
   const save = async () => {
     setBusy(true); setErr(null);
     try {
-      await onSave({ source_file: parsed.sourceFile, sheet: parsed.sheetName, header_row: parsed.headerRow, imported_at: new Date().toISOString(), settings, records: parsed.records });
+      await onSave({ source_file: parsed.sourceFile, sheet: parsed.sheetName, header_row: parsed.headerRow, imported_at: new Date().toISOString(), settings, records: filtered.records, rows_in_file: parsed.records.length, skipped_by_status: filtered.skippedByStatus });
       onClose();
     } catch (x) { setErr(`Couldn't save: ${x.message}`); }
     setBusy(false);
@@ -2919,9 +2937,12 @@ function RevenueImportModal({ onClose, onSave, previous, properties }) {
               <div className="attr-edit-item"><label>ROVR paid only once ROVR Payment Date is filled</label>
                 <select value={settings.gateRovrPaidOnPaymentDate ? "yes" : "no"} onChange={(e) => setSettings((s) => ({ ...s, gateRovrPaidOnPaymentDate: e.target.value === "yes" }))}><option value="no">No (default)</option><option value="yes">Yes</option></select>
               </div>
+              <div className="attr-edit-item"><label>Import only Status (column I) =</label><input type="text" placeholder="blank imports all rows" value={settings.statusFilter == null ? "" : settings.statusFilter} onChange={(e) => setSettings((s) => ({ ...s, statusFilter: e.target.value }))} /></div>
             </div>
             <div className="contract-dates-list">
-              {row("Rows imported", t.rows)}
+              {row("Rows in file (with an Engagement ID)", parsed.records.length)}
+              {row("Rows imported", `${t.rows}${String(settings.statusFilter || "").trim() ? ` (Status = ${String(settings.statusFilter).trim()})` : " (all statuses)"}`)}
+              {filtered.skippedCount > 0 && row("Rows skipped", `${filtered.skippedCount} (${Object.entries(filtered.skippedByStatus).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${k}`).join(", ")})`)}
               {row("Properties", t.properties)}
               {row("Invoiced (P)", rtMoney2(t.invoiced))}
               {row("ROVR pending (T)", rtMoney2(t.rovr_pending))}
@@ -2930,6 +2951,12 @@ function RevenueImportModal({ onClose, onSave, previous, properties }) {
               {row("Past due", `${t.past_due_rows} rows · ${rtMoney2(t.past_due)}`)}
               {row("Rows with warnings", t.warning_rows)}
             </div>
+            {filtered.skippedWithInvoiceDate.length > 0 && (
+              <div style={{ marginTop: 10, border: "1px solid #B8892B", background: "rgba(184,137,43,0.12)", borderRadius: 6, padding: 10, fontSize: 12.5 }}>
+                <b>Skipped by Status but already carry an Invoice Date</b>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{filtered.skippedWithInvoiceDate.map((r) => <li key={r.source_row}>Row {r.source_row} · {r.engagement_id} · {r.billing_milestone} · Status "{r.tracker_status || "(blank)"}" · invoiced {fmtDate(r.invoice_date)}{r.paid_date ? `, paid ${fmtDate(r.paid_date)}` : ", unpaid"} · {rtMoney2(r.invoiced)}</li>)}</ul>
+              </div>
+            )}
             <div className="section-header">Checks against Advisory Contracts</div>
             {checks.length === 0 ? <div style={{ color: "#7bd88a" }}>Billing agrees with Advisory Contracts.</div> : (
               <div className="contract-dates-list">
