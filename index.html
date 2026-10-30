@@ -1290,6 +1290,30 @@ function serviceExecutedDate(program, optionKey) {
   if (!opts[optionKey]) return null;
   return ((program.serviceContractDates || {})[svcKey]) || program.advisoryContractExecuted;
 }
+// Billing milestones: one checkbox per billing segment, recorded on the
+// property record so it's clear when each part of a scope can be billed.
+// Due Diligence/RFP Start is the service's contract execution date, so
+// it checks itself; the rest are checked by hand when the work hits
+// that point. Only segments for services on an executed contract show.
+const BILLING_MILESTONES = [
+  { key: "ddRfpStart", label: "Due Diligence/RFP Start", services: ["dueDiligence", "rfp", "incumbentNegotiation"], auto: true },
+  { key: "ddRfpComplete", label: "Due Diligence/RFP Complete", services: ["dueDiligence", "rfp", "incumbentNegotiation"] },
+  { key: "pdStart", label: "Program Design Start", services: ["programDesign"] },
+  { key: "pdComplete", label: "Program Design Complete", services: ["programDesign"] },
+  { key: "deploymentStart", label: "Deployment Start", services: ["deployment"] },
+];
+// Returns { contracted, done, date, by, auto } for one milestone.
+function billingMilestoneState(program, def) {
+  const opts = contractedOptionsOf(program);
+  const contracted = def.services.some((k) => opts[k]);
+  if (!contracted) return { contracted: false, done: false, date: null };
+  if (def.auto) {
+    const date = def.services.map((k) => serviceExecutedDate(program, k)).filter(Boolean).sort()[0] || null;
+    return { contracted: true, done: !!date, date, by: "Contract execution", auto: true };
+  }
+  const m = (program.billingMilestones || {})[def.key];
+  return { contracted: true, done: !!(m && m.date), date: (m && m.date) || null, by: (m && m.by) || null };
+}
 const OPTIONAL_PHASES = [
   PHASE_DEFS.find((d) => d.key === "rfp"),
   PHASE_DEFS.find((d) => d.key === "incumbentNegotiation"),
@@ -4454,7 +4478,7 @@ function NoteBody({ text }) {
   );
 }
 
-function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSetDecision, onSetPriority, onUpdateAttribute, onUpdateNotes, onUpdateNotesLog, onSetDDDate, onToggleDueDiligence, onToggleServiceOption, onSetServiceContractDate, onSetISPDate, onSetExpectedTCO, onSetDeploymentLiveDate, regionsList, onAddRegion, currentUserEmail }) {
+function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSetDecision, onSetPriority, onUpdateAttribute, onUpdateNotes, onUpdateNotesLog, onSetDDDate, onToggleDueDiligence, onToggleServiceOption, onSetServiceContractDate, onSetISPDate, onSetExpectedTCO, onSetDeploymentLiveDate, onSetBillingMilestone, regionsList, onAddRegion, currentUserEmail }) {
   const [notesOpen, setNotesOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState(null);
@@ -4774,6 +4798,40 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
         </div>
         <div className="dim" style={{ fontSize: 11, marginTop: -12, marginBottom: 18 }}>
           Each date is that service's contract execution date (an amendment that adds a service carries its own date). Set from the contract import. Due Diligence, when contracted, is bundled into RFP and bills at $0.
+        </div>
+
+        <div className="field-label" style={{ marginBottom: 6 }}>Billing milestones</div>
+        <div className="contract-dates-list bm-box" style={{ marginBottom: 6 }}>
+          {!program.advisoryContractExecuted ? (
+            <div className="contract-date-row"><span className="dim" style={{ fontSize: 12.5 }}>Billing milestones start once the advisory contract is executed.</span></div>
+          ) : BILLING_MILESTONES.map((def) => {
+            const st = billingMilestoneState(program, def);
+            const toggle = () => {
+              if (st.auto || !st.contracted) return;
+              onSetBillingMilestone(def.key, st.done ? null : { date: TODAY, by: currentUserEmail || null, at: new Date().toISOString() });
+            };
+            return (
+              <div key={def.key} className="contract-date-row" style={st.done ? { borderColor: "#007B0C" } : !st.contracted ? { opacity: 0.45 } : undefined}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: st.auto || !st.contracted ? "default" : "pointer" }}>
+                  <input type="checkbox" checked={st.done} disabled={st.auto || !st.contracted} onChange={toggle} />
+                  <span className="field-label" style={{ margin: 0 }}>{def.label}</span>
+                </label>
+                <span className="mono" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  {!st.contracted ? "Not contracted"
+                    : st.auto ? (st.date ? `${fmtDate(st.date)} · contract executed` : "Awaiting execution")
+                    : st.done ? (
+                      <>
+                        <input type="date" className="mono contract-date-input" value={st.date || ""} title={st.by ? `Checked by ${st.by}` : undefined}
+                          onChange={(e) => e.target.value && onSetBillingMilestone(def.key, { ...((program.billingMilestones || {})[def.key] || {}), date: e.target.value })} />
+                      </>
+                    ) : "Not yet"}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="dim" style={{ fontSize: 11, marginBottom: 18 }}>
+          Check a segment when it's reached; that's the signal it can be billed. The date defaults to today and can be changed. Due Diligence/RFP Start follows the contract execution date.
         </div>
 
         <div className="contract-dates-list" style={{ marginBottom: 18 }}>
@@ -7600,7 +7658,7 @@ function ChangeLogView({ rows, loading, error, onRefresh, properties, setPropert
 
   // Duplicate flag: merge "other" into "keep" — fill keep's blank attributes and
   // missing contract fields from other, copy other's notes across, close other.
-  const MERGE_PROGRAM_KEYS = ["advisoryContractDrafted", "advisoryContractExecuted", "contractPath", "contractLink", "contractStatus", "selectedOptions", "confirmedFees", "serviceContractDates", "ddContractExecuted", "prospectStart"];
+  const MERGE_PROGRAM_KEYS = ["advisoryContractDrafted", "advisoryContractExecuted", "contractPath", "contractLink", "contractStatus", "selectedOptions", "confirmedFees", "serviceContractDates", "ddContractExecuted", "prospectStart", "billingMilestones"];
   const mergeDuplicate = (row, keepCode, otherCode) => run(row, async () => {
     const K = byCode[keepCode], O = byCode[otherCode];
     if (!K || !O) throw new Error("one of the properties isn't in the tracker");
@@ -9416,6 +9474,14 @@ function App() {
       ...p, program: { ...p.program, expectedTCO: dateStr }
     }));
   };
+  const setBillingMilestone = (key, value) => {
+    setProperties((prev) => prev.map((p) => {
+      if (p.id !== programPropertyId) return p;
+      const bm = { ...(p.program.billingMilestones || {}) };
+      if (value) bm[key] = value; else delete bm[key];
+      return { ...p, program: { ...p.program, billingMilestones: bm } };
+    }));
+  };
   const setDeploymentLiveDate = (dateStr) => {
     setProperties((prev) => prev.map((p) => p.id !== programPropertyId ? p : {
       ...p, program: { ...p.program, deploymentLiveDate: dateStr }
@@ -9710,7 +9776,7 @@ function App() {
       )}
 
       {programProperty && !phaseSel && (
-        <ProgramModal property={programProperty} onClose={closeProgram} onOpenPhase={openPhaseFromProgram} onSetManualStatus={setManualStatus} onSetDecision={setDecision} onSetPriority={setPriority} onUpdateAttribute={updateAttribute} onUpdateNotes={updateNotes} onUpdateNotesLog={updateNotesLog} onSetDDDate={setDDDate} onToggleDueDiligence={toggleDueDiligenceSelected} onToggleServiceOption={toggleServiceOption} onSetServiceContractDate={setServiceContractDate} onSetISPDate={setISPDate} onSetExpectedTCO={setExpectedTCO} onSetDeploymentLiveDate={setDeploymentLiveDate} regionsList={regionsList} onAddRegion={addRegion} currentUserEmail={session && session.user ? session.user.email : null} />
+        <ProgramModal property={programProperty} onClose={closeProgram} onOpenPhase={openPhaseFromProgram} onSetManualStatus={setManualStatus} onSetDecision={setDecision} onSetPriority={setPriority} onUpdateAttribute={updateAttribute} onUpdateNotes={updateNotes} onUpdateNotesLog={updateNotesLog} onSetDDDate={setDDDate} onToggleDueDiligence={toggleDueDiligenceSelected} onToggleServiceOption={toggleServiceOption} onSetServiceContractDate={setServiceContractDate} onSetISPDate={setISPDate} onSetExpectedTCO={setExpectedTCO} onSetDeploymentLiveDate={setDeploymentLiveDate} onSetBillingMilestone={setBillingMilestone} regionsList={regionsList} onAddRegion={addRegion} currentUserEmail={session && session.user ? session.user.email : null} />
       )}
 
       {phaseProperty && phaseSel && (
