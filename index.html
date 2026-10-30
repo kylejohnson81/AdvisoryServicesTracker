@@ -7115,8 +7115,9 @@ function exportBillingMilestones(properties, billingImport) {
   return { total: rows.length, ready: action.filter((r) => r["Billing Flag"].startsWith("Ready")).length, check: action.filter((r) => r["Billing Flag"].startsWith("Check")).length };
 }
 
-function ImportExportModal({ section = "import", onClose, properties, setProperties, supabaseClient, onExport, userEmail, onLogged, billingImport, onSaveBillingImport }) {
+function ImportExportModal({ section: initialSection = "import", onClose, properties, setProperties, supabaseClient, onExport, userEmail, onLogged, billingImport, onSaveBillingImport }) {
   const [exportNote, setExportNote] = useState(null);
+  const [section, setSection] = useState(initialSection);
   const [revenueOpen, setRevenueOpen] = useState(false);
   const [mode, setMode] = useState(null); // null | "master" | "contracts"
   const [busy, setBusy] = useState(false);
@@ -7241,11 +7242,20 @@ function ImportExportModal({ section = "import", onClose, properties, setPropert
         <div className="modal-head">
           <div>
             {mode && <button className="btn-ghost" onClick={() => reset(null)} disabled={busy} style={{ marginBottom: 6 }}>← Back</button>}
-            <h2>{mode === "contracts" ? "Refresh Contract Data" : mode === "master" ? "Refresh Master Data" : section === "export" ? "Export" : "Import"}</h2>
+            <h2>{mode === "contracts" ? "Refresh Contract Data" : mode === "master" ? "Refresh Master Data" : "Import / Export"}</h2>
           </div>
           <button className="icon-btn" onClick={onClose} disabled={busy}><X size={18} /></button>
         </div>
 
+        {!mode && (
+          <div role="tablist" aria-label="Import or export" style={{ display: "flex", gap: 8, margin: "4px 0 10px" }}>
+            {[["import", "Import"], ["export", "Export"]].map(([k, l]) => {
+              const on = (section === "export") === (k === "export");
+              return <button key={k} role="tab" aria-selected={on} onClick={() => setSection(k)}
+                style={{ padding: "8px 18px", borderRadius: 8, cursor: "pointer", fontWeight: on ? 600 : 400, border: `1px solid ${on ? "#2f6fd0" : "var(--border, #2c4170)"}`, background: on ? "#2f6fd0" : "transparent", color: on ? "#fff" : "inherit" }}>{l}</button>;
+            })}
+          </div>
+        )}
         {!mode && section === "export" && (
           <div style={{ marginTop: 8 }}>
             {card("Billing Milestones", "Every contracted billing segment (Due Diligence/RFP Start and Complete, Program Design Start and Complete, Deployment Start) in Revenue Tracker layout, flagged for payment from the property record checkboxes and checked against the Revenue Tracker. The first tab lists what's ready to bill.",
@@ -9803,8 +9813,7 @@ function App() {
             {(() => { const n = changeLogRows.filter((r) => !r.reviewed && CL_DECISION_ACTIONS.includes(r.action)).length; return n > 0 ? <span className="nav-badge">{n}</span> : null; })()}
           </button>
           <button className="btn-ghost" onClick={() => setDocumentsOpen(true)} title="Shared forms, templates and reference files"><FileText size={15} /> Documents</button>
-          <button className="btn-ghost" onClick={() => setImportExportOpen("import")} title="Refresh master, contract and billing data"><FileText size={15} /> Import</button>
-          <button className="btn-ghost" onClick={() => setImportExportOpen("export")} title="Billing milestones and master export"><FileText size={15} /> Export</button>
+          <button className="btn-ghost" onClick={() => setImportExportOpen("import")}><FileText size={15} /> Import / Export</button>
           <button className="btn-ghost" onClick={() => { supabaseClient.auth.signOut(); setJustSignedOut(true); }}>Sign out</button>
         </div>
         <div className="brand-logo-plate">
@@ -9864,7 +9873,6 @@ function App() {
       {documentsOpen && <DocumentsModal onClose={() => setDocumentsOpen(false)} supabaseClient={supabaseClient} />}
       {importExportOpen && (
         <ImportExportModal
-          key={importExportOpen}
           section={importExportOpen === "export" ? "export" : "import"}
           onClose={() => setImportExportOpen(false)}
           properties={properties}
