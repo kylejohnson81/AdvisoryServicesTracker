@@ -3014,7 +3014,7 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
   if (!imp) {
     return (
       <div>
-        <div className="proto-dash"><div className="wrap" style={{ paddingBottom: 0 }}><div className="foot" style={{ marginTop: 0 }}>Showing calculated billing. Once the Revenue Tracker is imported (Import / Export → Refresh Billing), this page switches to it.</div></div></div>
+        <div className="proto-dash"><div className="wrap" style={{ paddingBottom: 0 }}><div className="foot" style={{ marginTop: 0 }}>Showing calculated billing. Once the Revenue Tracker is imported (Import → Refresh Billing), this page switches to it.</div></div></div>
         <LegacyBillingView properties={properties} onOpenProperty={onOpenProperty} onSetPaymentStatus={onSetPaymentStatus} onExport={onExport} statusFilter={statusFilter} onStatusFilterChange={onStatusFilterChange} />
       </div>
     );
@@ -3042,7 +3042,7 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
       <div className="wrap">
         <h1>Billing</h1>
         <p className="sub">
-          {imp ? <>From the Revenue Tracker import: <b>{imp.source_file || "Revenue Tracker"}</b>, imported {imp.imported_at ? fmtDate(imp.imported_at.slice(0, 10)) : "—"}{imp.imported_by ? ` by ${imp.imported_by}` : ""}. Status comes from the invoice and paid dates.</> : "No Revenue Tracker has been imported yet. Import it from Import / Export in the header."}
+          {imp ? <>From the Revenue Tracker import: <b>{imp.source_file || "Revenue Tracker"}</b>, imported {imp.imported_at ? fmtDate(imp.imported_at.slice(0, 10)) : "—"}{imp.imported_by ? ` by ${imp.imported_by}` : ""}. Status comes from the invoice and paid dates.</> : "No Revenue Tracker has been imported yet. Import it from Import in the header."}
         </p>
         <div className="toolbar" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           {imp && <label style={{ display: "flex", gap: 6, alignItems: "center", color: "var(--mut)", fontSize: 13 }}>As of <input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value || TODAY)} /></label>}
@@ -3051,7 +3051,7 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
         </div>
 
         {!imp ? (
-          <div className="card" style={{ marginTop: 12 }}>To see invoiced, paid, past-due and ROVR amounts here, use <b>Import / Export → Refresh Billing (Revenue Tracker)</b> in the header.</div>
+          <div className="card" style={{ marginTop: 12 }}>To see invoiced, paid, past-due and ROVR amounts here, use <b>Import → Refresh Billing (Revenue Tracker)</b> in the header.</div>
         ) : (
           <>
             <div className="card" style={{ marginTop: 12 }}>
@@ -7022,7 +7022,101 @@ async function ieApplyMasterData(supabaseClient, preview, fileName) {
   return { saved: rows.length, retired: codes.length, logError: logErr ? logErr.message : null };
 }
 
-function ImportExportModal({ onClose, properties, setProperties, supabaseClient, onExport, userEmail, onLogged, billingImport, onSaveBillingImport }) {
+// ---- Billing Milestones export: one row per contracted billing segment,
+// laid out like the Revenue Tracker (Engagement ID, Client / Owner, Asset /
+// Property, Yardi Code, Service Bucket, Billing Milestone / Period) and
+// flagged for payment from the property record's milestone checkboxes,
+// compared with what the Revenue Tracker already shows as invoiced/paid.
+const BM_RT_LINE = {
+  ddRfpStart: { bucket: "RFP Services", milestone: "50% Start", half: "firstHalf" },
+  ddRfpComplete: { bucket: "RFP Services", milestone: "50% Completion", half: "secondHalf" },
+  pdStart: { bucket: "Program Design / Contract Oversight", milestone: "50% Start", half: "firstHalf" },
+  pdComplete: { bucket: "Program Design / Contract Oversight", milestone: "50% Completion", half: "secondHalf" },
+  deploymentStart: { bucket: "Deployment & Ongoing Management", milestone: "Monthly", monthly: true },
+};
+function buildBillingMilestoneRows(properties, billingImport) {
+  const match = rtPropertyMatcher(properties);
+  const rtByProp = new Map();
+  const recs = billingImport && billingImport.records ? billingImport.records.map((r) => rtEvaluate(r, TODAY, billingImport.settings)) : [];
+  recs.forEach((r) => { const p = match(r); if (!p) return; if (!rtByProp.has(p.id)) rtByProp.set(p.id, []); rtByProp.get(p.id).push(r); });
+  const norm = (x) => String(x || "").trim().toLowerCase();
+  const rows = [];
+  properties.forEach((p) => {
+    const prog = p.program || {};
+    if (!prog.advisoryContractExecuted || prog.manualStatus === "Closed") return;
+    const a = prog.attributes || {};
+    const lines = rtByProp.get(p.id) || [];
+    const engagement = (lines.find((l) => l.engagement_id) || {}).engagement_id || "";
+    let billing = null; try { billing = computeAdvisoryBilling(p); } catch (e) {}
+    const opts = contractedOptionsOf(prog);
+    BILLING_MILESTONES.forEach((def) => {
+      const st = billingMilestoneState(prog, def);
+      if (!st.contracted) return;
+      const map = BM_RT_LINE[def.key];
+      // Matching Revenue Tracker lines: same bucket and milestone; a "100% One-time"
+      // line covers both the start and the completion payment.
+      const rt = lines.filter((l) => norm(l.service_bucket) === norm(map.bucket)
+        && (norm(l.billing_milestone) === norm(map.milestone) || (!map.monthly && /100%/.test(l.billing_milestone || ""))));
+      const invoiced = rt.filter((l) => l.invoice_date || l.paid_date);
+      const paid = rt.length > 0 && rt.every((l) => l.paid_date) && invoiced.length > 0;
+      const pastDue = invoiced.some((l) => l.payment_status === "Past due");
+      let amount = null;
+      if (billing) {
+        if (map.monthly) amount = billing.deployment ? billing.deployment.monthlyTotal : null;
+        else {
+          const fee = def.key.startsWith("ddRfp") ? (opts.dueDiligence && billing.dueDiligence ? billing.dueDiligence : billing.rfp) : billing.programDesign;
+          amount = fee && !fee.credited && fee[map.half] ? fee[map.half].amount : (fee && fee.credited ? 0 : null);
+        }
+      }
+      let flag;
+      if (!st.done) flag = invoiced.length ? "Check: billed before milestone checked" : "Not yet reached";
+      else if (map.monthly) flag = invoiced.length ? (pastDue ? "Billing monthly: past due" : "Billing monthly") : "Ready to bill: start monthly billing";
+      else if (amount === 0) flag = "No charge (credited)";
+      else if (!invoiced.length) flag = "Ready to bill";
+      else if (paid) flag = "Paid";
+      else flag = pastDue ? "Invoiced: past due" : "Invoiced: awaiting payment";
+      const last = invoiced.slice().sort((x, y) => String(y.invoice_date || "").localeCompare(String(x.invoice_date || "")))[0] || null;
+      rows.push({
+        "Engagement ID": engagement,
+        "Client / Owner": a.Client || "",
+        "Asset / Property": p.name,
+        "Yardi Code": a["Yardi Code"] || "",
+        "P-Code": p.code,
+        "Service Bucket": map.bucket,
+        "Billing Milestone / Period": map.milestone,
+        "Tracker Milestone": def.label,
+        "Milestone Reached": st.done ? "Yes" : "No",
+        "Milestone Date": st.date || "",
+        "Checked By": st.by || "",
+        "Amount to Bill": amount == null ? "" : Math.round(amount * 100) / 100,
+        "Revenue Tracker Lines": rt.length,
+        "Invoice #": last ? (last.invoice_number || "") : "",
+        "Invoice Date": last ? (last.invoice_date || "") : "",
+        "Paid Date": last ? (last.paid_date || "") : "",
+        "Billing Flag": flag,
+      });
+    });
+  });
+  return rows.sort((x, y) => x["P-Code"].localeCompare(y["P-Code"]));
+}
+function exportBillingMilestones(properties, billingImport) {
+  const rows = buildBillingMilestoneRows(properties, billingImport);
+  const action = rows.filter((r) => /^Ready to bill|^Check/.test(r["Billing Flag"]));
+  const wb = XLSX.utils.book_new();
+  const sheet = (data, name) => {
+    const ws = XLSX.utils.json_to_sheet(data.length ? data : [{ "Billing Flag": "Nothing to flag" }]);
+    ws["!cols"] = Object.keys((data[0] || { "Billing Flag": "" })).map((k) => ({ wch: k === "Asset / Property" || k === "Billing Flag" ? 34 : Math.min(30, Math.max(10, k.length + 3)) }));
+    ws["!autofilter"] = { ref: ws["!ref"] };
+    XLSX.utils.book_append_sheet(wb, ws, name);
+  };
+  sheet(action, "Ready to Bill");
+  sheet(rows, "All Milestones");
+  XLSX.writeFile(wb, `Advisory-Billing-Milestones-${TODAY}.xlsx`);
+  return { total: rows.length, ready: action.filter((r) => r["Billing Flag"].startsWith("Ready")).length, check: action.filter((r) => r["Billing Flag"].startsWith("Check")).length };
+}
+
+function ImportExportModal({ section = "import", onClose, properties, setProperties, supabaseClient, onExport, userEmail, onLogged, billingImport, onSaveBillingImport }) {
+  const [exportNote, setExportNote] = useState(null);
   const [revenueOpen, setRevenueOpen] = useState(false);
   const [mode, setMode] = useState(null); // null | "master" | "contracts"
   const [busy, setBusy] = useState(false);
@@ -7147,17 +7241,23 @@ function ImportExportModal({ onClose, properties, setProperties, supabaseClient,
         <div className="modal-head">
           <div>
             {mode && <button className="btn-ghost" onClick={() => reset(null)} disabled={busy} style={{ marginBottom: 6 }}>← Back</button>}
-            <h2>{mode === "contracts" ? "Refresh Contract Data" : mode === "master" ? "Refresh Master Data" : "Import / Export"}</h2>
+            <h2>{mode === "contracts" ? "Refresh Contract Data" : mode === "master" ? "Refresh Master Data" : section === "export" ? "Export" : "Import"}</h2>
           </div>
           <button className="icon-btn" onClick={onClose} disabled={busy}><X size={18} /></button>
         </div>
 
-        {!mode && (
+        {!mode && section === "export" && (
           <div style={{ marginTop: 8 }}>
-            <div className="field-label">Export</div>
+            {card("Billing Milestones", "Every contracted billing segment (Due Diligence/RFP Start and Complete, Program Design Start and Complete, Deployment Start) in Revenue Tracker layout, flagged for payment from the property record checkboxes and checked against the Revenue Tracker. The first tab lists what's ready to bill.",
+              <button className="btn-primary" onClick={() => { try { const r = exportBillingMilestones(properties, billingImport); setExportNote(`Downloaded: ${r.ready} ready to bill${r.check ? `, ${r.check} to check (billed before the milestone was checked)` : ""}, ${r.total} milestones in all.`); } catch (x) { setExportNote(`Export failed: ${x.message || x}`); } }}>Download</button>)}
             {card("Master Export", "Download every property, its attributes, phases and notes history as an Excel file.",
               <button className="btn-primary" onClick={() => { onExport(); }}>Download</button>)}
-            <div className="field-label" style={{ marginTop: 14 }}>Import</div>
+            {exportNote && <div style={{ fontSize: 13, opacity: 0.85, marginTop: 6 }}>{exportNote}</div>}
+            {!(billingImport && billingImport.records) && <div style={{ fontSize: 12, opacity: 0.7, marginTop: 6 }}>No Revenue Tracker is imported, so Billing Milestones can't show what's already invoiced.</div>}
+          </div>
+        )}
+        {!mode && section !== "export" && (
+          <div style={{ marginTop: 8 }}>
             {card("Refresh Master Data", "Upload Greystar's Property Attributes (Master Level) export. Updates the master list and marks which Yardi codes are currently active; codes missing from the file are marked no longer in master.",
               <button className="btn-primary" onClick={() => reset("master")}>Choose</button>)}
             {card("Refresh Contract Data", "Upload the Ironclad All Status export. Updates advisory contract dates, selected services and confirmed fees.",
@@ -8810,7 +8910,7 @@ function App() {
   const [changeLogRows, setChangeLogRows] = useState([]);
   const [changeLogLoading, setChangeLogLoading] = useState(false);
   const [changeLogError, setChangeLogError] = useState(null);
-  const [importExportOpen, setImportExportOpen] = useState(false);
+  const [importExportOpen, setImportExportOpen] = useState(false); // false | "import" | "export"
   const [documentsOpen, setDocumentsOpen] = useState(false);
   // Owner records (app_state "clientPortfolios") and client-level digest notes.
   const [portfolios, setPortfolios] = useState({});
@@ -9703,7 +9803,8 @@ function App() {
             {(() => { const n = changeLogRows.filter((r) => !r.reviewed && CL_DECISION_ACTIONS.includes(r.action)).length; return n > 0 ? <span className="nav-badge">{n}</span> : null; })()}
           </button>
           <button className="btn-ghost" onClick={() => setDocumentsOpen(true)} title="Shared forms, templates and reference files"><FileText size={15} /> Documents</button>
-          <button className="btn-ghost" onClick={() => setImportExportOpen(true)}><FileText size={15} /> Import / Export</button>
+          <button className="btn-ghost" onClick={() => setImportExportOpen("import")} title="Refresh master, contract and billing data"><FileText size={15} /> Import</button>
+          <button className="btn-ghost" onClick={() => setImportExportOpen("export")} title="Billing milestones and master export"><FileText size={15} /> Export</button>
           <button className="btn-ghost" onClick={() => { supabaseClient.auth.signOut(); setJustSignedOut(true); }}>Sign out</button>
         </div>
         <div className="brand-logo-plate">
@@ -9763,6 +9864,8 @@ function App() {
       {documentsOpen && <DocumentsModal onClose={() => setDocumentsOpen(false)} supabaseClient={supabaseClient} />}
       {importExportOpen && (
         <ImportExportModal
+          key={importExportOpen}
+          section={importExportOpen === "export" ? "export" : "import"}
           onClose={() => setImportExportOpen(false)}
           properties={properties}
           setProperties={setProperties}
