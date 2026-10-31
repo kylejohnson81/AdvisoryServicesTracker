@@ -7653,6 +7653,11 @@ async function ispExtract(supabaseClient, id) {
 // former name still pairs through its address, ZIP, units or owner entity.
 // Conflicts on high-likelihood identifiers (state, ZIP, street address, units)
 // are flagged even when the names agree, or when someone picks the property.
+// Street compare: dupAddr plus spelled-out ordinals ("Fifth Ave" = "5th Avenue").
+const ISP_ORDINALS = { first: "1st", second: "2nd", third: "3rd", fourth: "4th", fifth: "5th", sixth: "6th", seventh: "7th", eighth: "8th", ninth: "9th", tenth: "10th", eleventh: "11th", twelfth: "12th" };
+const ispAddr = (s) => dupAddr(s).replace(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth)\b/g, (w) => ISP_ORDINALS[w]);
+// Only a value that starts with a house number counts as a street address ("Denver" or "Doral" alone does not).
+const ispStreetOnly = (s) => (/^\s*\d/.test(String(s || "")) ? String(s).trim() : "");
 function ispProbe(c) {
   const x = (c && c.extraction) || {};
   const full = String(c.property_address_in_contract || "");
@@ -7660,15 +7665,15 @@ function ispProbe(c) {
   const sz = full.match(/\b([A-Z]{2})\s+(\d{5})(?:-\d{4})?\b/);
   const state = String(x.property_state || (sz && sz[1]) || "").toUpperCase().trim();
   const zip = String(x.property_zip || (sz && sz[2]) || "").replace(/\D/g, "").slice(0, 5);
-  const street = x.property_street || (parts.length >= 2 ? parts[0] : "");
-  const city = x.property_city || (parts.length >= 3 ? parts[parts.length - 2] : "");
+  const street = ispStreetOnly(x.property_street) || (parts.length >= 2 ? ispStreetOnly(parts[0]) : "");
+  const city = x.property_city || (parts.length >= 3 ? parts[parts.length - 2] : parts.length === 2 && !street ? parts[0] : "");
   const names = [c.property_name_in_contract, ...(Array.isArray(x.other_property_names) ? x.other_property_names : [])].filter((n) => n && String(n).trim());
-  return { names, street: dupAddr(street), streetRaw: street, city: String(city).toLowerCase().trim(), cityRaw: city, state, zip, units: Number(c.units) || null, owner: dupNorm(c.owner_entity), ownerRaw: c.owner_entity || "" };
+  return { names, street: ispAddr(street), streetRaw: street, city: String(city).toLowerCase().trim(), cityRaw: city, state, zip, units: Number(c.units) || null, owner: dupNorm(c.owner_entity), ownerRaw: c.owner_entity || "" };
 }
 function ispPropIds(p) {
   const a = (p.program && p.program.attributes) || {};
   const z = String(a.Zip || "").replace(/\D/g, "");
-  return { names: [p.name, ...previousNamesOf(p)], street: dupAddr(a.Address), streetRaw: a.Address || "", city: String(a.City || "").toLowerCase().trim(), cityRaw: a.City || "",
+  return { names: [p.name, ...previousNamesOf(p)], street: ispAddr(a.Address), streetRaw: a.Address || "", city: String(a.City || "").toLowerCase().trim(), cityRaw: a.City || "",
     state: String(a.State || "").toUpperCase().trim(), zip: (z.length === 4 ? "0" + z : z).slice(0, 5), units: Number(a.Units) || null,
     client: dupNorm(a.Client), jv: dupNorm(a["JV Partner"]), clientRaw: a.Client || "", jvRaw: a["JV Partner"] || "" };
 }
@@ -7718,6 +7723,10 @@ function ispScoreProperty(probe, p) {
   }
   if (probe.units && P.units) {
     if (Math.abs(probe.units - P.units) <= Math.max(2, Math.round(P.units * 0.05))) { score += 15; reasons.push(`same units (${P.units})`); }
+    else if (probe.units < P.units && (nm.score >= 45 || reasons.some((t) => /street address/.test(t)))) {
+      // Fewer units than the property, but the name or address agrees: usually a contract for one phase or building.
+      conflicts.push({ text: `Units differ: contract ${probe.units}, tracker ${P.units} (likely one phase or building)`, high: false });
+    }
     else { score -= 25; conflicts.push({ text: `Units differ: contract ${probe.units}, tracker ${P.units} (could be one phase)`, high: true }); }
   }
   if (probe.owner) {
@@ -7750,7 +7759,11 @@ function ispPairStatus(c, properties) {
   const p = c.property_code && properties.find((x) => x.code === c.property_code);
   if (!p) return { key: "unpaired", label: "Unpaired" };
   const r = ispScoreProperty(ispProbe(c), p);
-  if (r.conflicts.some((x) => x.high)) return { key: "mismatch", label: "Mismatch", r };
+  const m = c.match || {};
+  const byHand = m.method === "manual" || m.method === "confirmed";
+  if (byHand) r.reasons = [...r.reasons, `paired by hand${m.by ? ` by ${m.by}` : ""}${m.at ? ` on ${String(m.at).slice(0, 10)}` : ""}`];
+  // A person confirmed this pairing despite the conflicts: keep it visible as Check, not Mismatch.
+  if (r.conflicts.some((x) => x.high)) return byHand ? { key: "check", label: "Check", r } : { key: "mismatch", label: "Mismatch", r };
   if (r.conflicts.length || ispConfidence(r) === "Low") return { key: "check", label: "Check", r };
   return { key: "paired", label: "Paired", r };
 }
