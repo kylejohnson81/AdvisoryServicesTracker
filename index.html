@@ -8012,8 +8012,24 @@ function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCo
         const hash = await ispFileHash(buf);
         if (batchHashes.has(hash)) { setItem(i, { state: "Skipped: same file as another one in this upload", skipped: true }); return; }
         batchHashes.add(hash);
-        const dup = await supabaseClient.from("isp_contracts").select("id, file_name, property_code").eq("file_sha256", hash).limit(1);
-        if (dup.data && dup.data.length) { const d = dup.data[0]; setItem(i, { state: `Skipped: already in the repository as "${d.file_name}"${d.property_code ? ` (${d.property_code})` : ""}`, skipped: true }); return; }
+        const dup = await supabaseClient.from("isp_contracts").select("id, file_name, property_code, file_path, doc_kind").eq("file_sha256", hash).limit(1);
+        if (dup.data && dup.data.length) {
+          const d = dup.data[0];
+          if (!d.file_path) {
+            // Already read (e.g. a catch-up batch read outside the tracker) but the PDF
+            // isn't attached yet: attach this file to that record, no new read.
+            setItem(i, { state: "Attaching to the contract already on file…" });
+            const apath = `isp/${d.property_code || "unpaired"}/${Date.now()}-${f.name.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
+            const aup = await supabaseClient.storage.from(ISP_BUCKET).upload(apath, f, { contentType: "application/pdf", upsert: false });
+            if (aup.error) throw new Error(`Upload failed: ${aup.error.message}`);
+            const au = await supabaseClient.from("isp_contracts").update({ file_path: apath, file_size: f.size, uploaded_by: userEmail || null }).eq("id", d.id).select().single();
+            if (au.error) throw new Error(`Attaching failed: ${au.error.message}`);
+            setItem(i, { state: `PDF attached to the contract already read${d.property_code ? ` (${d.property_code})` : ""}; no new read needed`, ok: true, attached: true });
+            if (onChanged) onChanged();
+            return;
+          }
+          setItem(i, { state: `Skipped: already in the repository as "${d.file_name}"${d.property_code ? ` (${d.property_code})` : ""}`, skipped: true }); return;
+        }
         setItem(i, { state: "Preparing pages…" });
         const prep = await ispPreparePages(buf, docKind);
         const folder = code === "auto" ? "unpaired" : code;
@@ -8056,7 +8072,7 @@ function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCo
     await Promise.all(Array.from({ length: Math.min(ISP_CONCURRENCY, files.length) }, worker));
     setBusy(false);
   };
-  const counts = items.reduce((m, x) => { m.total++; if (x.skipped) m.skip++; else if (x.err) m.err++; else if (x.picking) m.pick++; else if (x.contract && !x.picking) m.done++; else m.wait++; return m; }, { total: 0, done: 0, pick: 0, err: 0, wait: 0, skip: 0 });
+  const counts = items.reduce((m, x) => { m.total++; if (x.attached) m.done++; else if (x.skipped) m.skip++; else if (x.err) m.err++; else if (x.picking) m.pick++; else if (x.contract && !x.picking) m.done++; else m.wait++; return m; }, { total: 0, done: 0, pick: 0, err: 0, wait: 0, skip: 0 });
 
   return (
     <div>
