@@ -7628,16 +7628,6 @@ function ispMonthsToExpiry(c) {
   const d = (parseDate(String(c.expiration_date).slice(0, 10)) - parseDate(TODAY)) / 86400000;
   return Math.round(d / 30.44);
 }
-// Matches a contract to a tracker property by the property name in the contract.
-function ispMatchProperty(c, properties) {
-  const nn = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  const want = nn(c.property_name_in_contract);
-  if (!want) return null;
-  const hit = properties.find((p) => nn(p.name) === want || previousNamesOf(p).some((n) => nn(n) === want));
-  if (hit) return hit;
-  const loose = properties.filter((p) => nn(p.name).length > 4 && (want.includes(nn(p.name)) || nn(p.name).includes(want)));
-  return loose.length === 1 ? loose[0] : null;
-}
 async function ispOpenPdf(supabaseClient, c) {
   const win = window.open("about:blank", "_blank");
   const { data, error } = await supabaseClient.storage.from(ISP_BUCKET).createSignedUrl(c.file_path, 300);
@@ -7654,6 +7644,209 @@ async function ispExtract(supabaseClient, id) {
   return data && data.contract;
 }
 
+// ---- Pairing a contract to its tracker property ----
+// Same approach as the duplicate check (master data vs digest): score every
+// tracker property on several identifiers, so a contract that uses a legal or
+// former name still pairs through its address, ZIP, units or owner entity.
+// Conflicts on high-likelihood identifiers (state, ZIP, street address, units)
+// are flagged even when the names agree, or when someone picks the property.
+function ispProbe(c) {
+  const x = (c && c.extraction) || {};
+  const full = String(c.property_address_in_contract || "");
+  const parts = full.split(",").map((s) => s.trim()).filter(Boolean);
+  const sz = full.match(/\b([A-Z]{2})\s+(\d{5})(?:-\d{4})?\b/);
+  const state = String(x.property_state || (sz && sz[1]) || "").toUpperCase().trim();
+  const zip = String(x.property_zip || (sz && sz[2]) || "").replace(/\D/g, "").slice(0, 5);
+  const street = x.property_street || (parts.length >= 2 ? parts[0] : "");
+  const city = x.property_city || (parts.length >= 3 ? parts[parts.length - 2] : "");
+  const names = [c.property_name_in_contract, ...(Array.isArray(x.other_property_names) ? x.other_property_names : [])].filter((n) => n && String(n).trim());
+  return { names, street: dupAddr(street), streetRaw: street, city: String(city).toLowerCase().trim(), cityRaw: city, state, zip, units: Number(c.units) || null, owner: dupNorm(c.owner_entity), ownerRaw: c.owner_entity || "" };
+}
+function ispPropIds(p) {
+  const a = (p.program && p.program.attributes) || {};
+  const z = String(a.Zip || "").replace(/\D/g, "");
+  return { names: [p.name, ...previousNamesOf(p)], street: dupAddr(a.Address), streetRaw: a.Address || "", city: String(a.City || "").toLowerCase().trim(), cityRaw: a.City || "",
+    state: String(a.State || "").toUpperCase().trim(), zip: (z.length === 4 ? "0" + z : z).slice(0, 5), units: Number(a.Units) || null,
+    client: dupNorm(a.Client), jv: dupNorm(a["JV Partner"]), clientRaw: a.Client || "", jvRaw: a["JV Partner"] || "" };
+}
+function ispNameCompare(namesA, namesB) {
+  let best = { score: 0, label: null, jac: 0 };
+  namesA.forEach((na) => namesB.forEach((nb) => {
+    const A = dupNameTokens(na), B = dupNameTokens(nb);
+    if (!A.length || !B.length) return;
+    const sa = new Set(A), sb = new Set(B);
+    const inter = [...sa].filter((t) => sb.has(t)).length, jac = inter / new Set([...sa, ...sb]).size;
+    const small = sa.size <= sb.size ? sa : sb, big = sa.size <= sb.size ? sb : sa;
+    const contained = [...small].every((t) => big.has(t)) && (small.size >= 2 || [...small][0].length >= 5);
+    let s = 0, label = null;
+    if (A.join(" ") === B.join(" ")) { s = 60; label = `same name ("${nb}")`; }
+    else if (contained || jac >= 0.6) { s = Math.round(45 * Math.max(jac, contained ? 0.75 : 0)); label = `similar name ("${na}" / "${nb}", ${Math.round(jac * 100)}% word overlap)`; }
+    else if (jac >= 0.3) { s = Math.round(25 * jac); label = `partly similar name ("${na}" / "${nb}")`; }
+    if (s > best.score) best = { score: s, label, jac };
+  }));
+  return best;
+}
+// Scores one tracker property against a contract: { score, reasons[], conflicts[{text, high}] }
+function ispScoreProperty(probe, p) {
+  const P = ispPropIds(p);
+  let score = 0; const reasons = [], conflicts = [];
+  const nm = ispNameCompare(probe.names, P.names);
+  if (nm.label) { score += nm.score; reasons.push(nm.label); }
+  if (probe.street && P.street) {
+    if (probe.street === P.street) { score += 80; reasons.push(`same street address (${P.streetRaw})`); }
+    else {
+      const na = probe.street.match(/^\d+/), nb = P.street.match(/^\d+/);
+      const restA = probe.street.replace(/^\d+\s*/, ""), restB = P.street.replace(/^\d+\s*/, "");
+      if (na && nb && na[0] === nb[0] && (restA.includes(restB) || restB.includes(restA))) { score += 60; reasons.push(`street address matches (${probe.streetRaw} / ${P.streetRaw})`); }
+      else { score -= 50; conflicts.push({ text: `Street address differs: contract "${probe.streetRaw}", tracker "${P.streetRaw}"`, high: true }); }
+    }
+  }
+  if (probe.state && P.state) {
+    if (probe.state === P.state) score += 5;
+    else { score -= 80; conflicts.push({ text: `State differs: contract ${probe.state}, tracker ${P.state}`, high: true }); }
+  }
+  if (probe.zip && P.zip) {
+    if (probe.zip === P.zip) { score += 20; reasons.push(`same ZIP (${P.zip})`); }
+    else { score -= 40; conflicts.push({ text: `ZIP differs: contract ${probe.zip}, tracker ${P.zip}`, high: true }); }
+  }
+  if (probe.city && P.city) {
+    if (probe.city === P.city) { score += 10; reasons.push(`same city (${P.cityRaw})`); }
+    else { score -= 15; conflicts.push({ text: `City differs: contract ${probe.cityRaw}, tracker ${P.cityRaw}`, high: false }); }
+  }
+  if (probe.units && P.units) {
+    if (Math.abs(probe.units - P.units) <= Math.max(2, Math.round(P.units * 0.05))) { score += 15; reasons.push(`same units (${P.units})`); }
+    else { score -= 25; conflicts.push({ text: `Units differ: contract ${probe.units}, tracker ${P.units} (could be one phase)`, high: true }); }
+  }
+  if (probe.owner) {
+    const ownerToks = dupNameTokens(probe.ownerRaw);
+    const namedAfter = P.names.some((n) => { const t = dupNameTokens(n); return t.length >= 1 && t.every((w) => ownerToks.includes(w)) && t.join("").length >= 5; });
+    if ((P.client && (probe.owner.includes(P.client) || P.client.includes(probe.owner))) || (P.jv && (probe.owner.includes(P.jv) || P.jv.includes(probe.owner)))) { score += 15; reasons.push(`owner entity matches client (${P.jvRaw && probe.owner.includes(P.jv) ? P.jvRaw : P.clientRaw})`); }
+    else if (namedAfter) { score += 20; reasons.push(`owner entity is named after the property (${probe.ownerRaw})`); }
+  }
+  return { score, reasons, conflicts, nameScore: nm.score };
+}
+const ispConfidence = (r) => (r.score >= 100 && !r.conflicts.some((x) => x.high)) ? "High" : (r.score >= 55 && !r.conflicts.some((x) => x.high)) ? "Medium" : "Low";
+// Ranked tracker candidates for a contract, best first (top 5).
+function ispRankProperties(c, properties) {
+  const probe = ispProbe(c);
+  return properties.map((p) => ({ property: p, ...ispScoreProperty(probe, p) }))
+    .filter((r) => r.score >= 25 || r.nameScore > 0) // name-only or conflicting candidates still show, with their warnings
+    .sort((a, b) => b.score - a.score).slice(0, 5)
+    .map((r) => ({ ...r, confidence: ispConfidence(r) }));
+}
+// Auto-pair only on a clear, conflict-free, high-likelihood match well ahead of the runner-up.
+function ispAutoPick(ranked) {
+  const [a, b] = ranked;
+  if (!a || a.confidence !== "High") return null;
+  if (b && a.score - b.score < 40) return null;
+  return a;
+}
+// Pairing status against the linked property: Unpaired / Mismatch / Check / Paired.
+function ispPairStatus(c, properties) {
+  if (c.status !== "done") return { key: "pending", label: "—" };
+  const p = c.property_code && properties.find((x) => x.code === c.property_code);
+  if (!p) return { key: "unpaired", label: "Unpaired" };
+  const r = ispScoreProperty(ispProbe(c), p);
+  if (r.conflicts.some((x) => x.high)) return { key: "mismatch", label: "Mismatch", r };
+  if (r.conflicts.length || ispConfidence(r) === "Low") return { key: "check", label: "Check", r };
+  return { key: "paired", label: "Paired", r };
+}
+const ISP_PAIR_STYLE = { paired: { background: "#1f5a34", color: "#b8efc7" }, check: { background: "#5a4a1a", color: "#ffd98a" }, mismatch: { background: "#6e2a28", color: "#ffc7c1" }, unpaired: { background: "#3d3670", color: "#d3cdfa" }, pending: { background: "transparent", color: "var(--mut)" } };
+function IspPairPill({ c, properties }) {
+  const s = ispPairStatus(c, properties);
+  const tip = s.r ? [...s.r.reasons, ...s.r.conflicts.map((x) => `⚠ ${x.text}`)].join("\n") : s.key === "unpaired" ? "Not paired to a tracker property yet" : "";
+  return <span className="pill" style={ISP_PAIR_STYLE[s.key]} title={tip}>{s.label}</span>;
+}
+async function ispSavePair(supabaseClient, c, property, method, ranked, userEmail) {
+  const r = ranked && ranked.find((x) => x.property.code === property.code) || { ...ispScoreProperty(ispProbe(c), property) };
+  const match = { method, confidence: r.confidence || ispConfidence(r), score: r.score, reasons: r.reasons, conflicts: (r.conflicts || []).map((x) => x.text), by: userEmail || null, at: new Date().toISOString() };
+  const { data, error } = await supabaseClient.from("isp_contracts").update({ property_code: property.code, match }).eq("id", c.id).select().single();
+  if (error) throw new Error(error.message);
+  supabaseClient.from("master_sync_log").insert([{ property_code: property.code, property_name: property.name, action: "info", field: "ISP contract paired",
+    old_value: c.property_code || null, new_value: `${c.provider || c.file_name}`, reason: `${method === "auto" ? "Auto-paired" : method === "confirmed" ? "Recommended match confirmed" : "Paired by hand"} (${match.confidence} confidence: ${match.reasons.join("; ") || "no shared identifiers"})${match.conflicts.length ? `. Conflicts: ${match.conflicts.join("; ")}` : ""}.`, source: "ISP contract" }]).then(() => {});
+  return data;
+}
+
+// Recommended property + alternatives + full list, for pairing a contract.
+function IspPairPicker({ contract, properties, supabaseClient, userEmail, onPaired, compact }) {
+  const ranked = useMemo(() => ispRankProperties(contract, properties), [contract, properties]);
+  const top = ranked[0] || null;
+  const [pick, setPick] = useState(contract.property_code || (top ? top.property.code : ""));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const sorted = useMemo(() => properties.slice().sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true })), [properties]);
+  const chosen = properties.find((p) => p.code === pick) || null;
+  const chosenCheck = chosen ? (ranked.find((r) => r.property.code === pick) || { ...ispScoreProperty(ispProbe(contract), chosen) }) : null;
+  const confirm = async () => {
+    if (!chosen) return;
+    if (chosenCheck && chosenCheck.conflicts.some((x) => x.high) && !window.confirm(`The contract doesn't match ${chosen.code} ${chosen.name} on:\n\n${chosenCheck.conflicts.filter((x) => x.high).map((x) => "• " + x.text).join("\n")}\n\nPair it anyway?`)) return;
+    setBusy(true); setErr(null);
+    try { const d = await ispSavePair(supabaseClient, contract, chosen, top && pick === top.property.code ? "confirmed" : "manual", ranked, userEmail); onPaired && onPaired(d); }
+    catch (x) { setErr(`Couldn't save: ${x.message}`); }
+    setBusy(false);
+  };
+  const conf = (r) => <span className="pill" style={{ marginLeft: 6, ...(r.confidence === "High" ? ISP_PAIR_STYLE.paired : r.confidence === "Medium" ? ISP_PAIR_STYLE.check : ISP_PAIR_STYLE.mismatch) }}>{r.confidence}</span>;
+  return (
+    <div style={{ border: "1px solid var(--border, #2c4170)", borderRadius: 10, padding: 12, marginTop: 6, fontSize: 13 }}>
+      <div style={{ opacity: 0.8, marginBottom: 6 }}>
+        Contract identifies: <b>{contract.property_name_in_contract || "no property name"}</b>{contract.property_address_in_contract ? ` · ${contract.property_address_in_contract}` : ""}{contract.units ? ` · ${contract.units} units` : ""}{contract.owner_entity ? ` · owner ${contract.owner_entity}` : ""}
+      </div>
+      {ranked.length === 0 ? <div style={{ color: "#ffd98a", marginBottom: 6 }}>No tracker property shares a name, address, ZIP or owner with this contract. Pick it from the list.</div> : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+          {ranked.slice(0, compact ? 3 : 5).map((r, i) => (
+            <label key={r.property.code} style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer", padding: "4px 6px", borderRadius: 6, background: pick === r.property.code ? "rgba(79,143,232,.15)" : "transparent" }}>
+              <input type="radio" checked={pick === r.property.code} onChange={() => setPick(r.property.code)} style={{ marginTop: 3 }} />
+              <span>
+                <b>{r.property.code} {r.property.name}</b>{i === 0 && <span style={{ marginLeft: 6, opacity: 0.7 }}>Recommended</span>}{conf(r)}
+                <div style={{ fontSize: 12, opacity: 0.8 }}>{r.reasons.join(" · ") || "no shared identifiers"}</div>
+                {r.conflicts.map((x, k) => <div key={k} style={{ fontSize: 12, color: x.high ? "#ff8f86" : "#ffd98a" }}>⚠ {x.text}</div>)}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ opacity: 0.8 }}>{ranked.length ? "Or choose another:" : "Property:"}</span>
+        <select value={pick} onChange={(e) => setPick(e.target.value)} style={{ minWidth: 260 }}>
+          <option value="">Select a property…</option>
+          {sorted.map((p) => <option key={p.id} value={p.code}>{p.code} {p.name}</option>)}
+        </select>
+        <button className="btn-primary" disabled={!chosen || busy} onClick={confirm}>{busy ? "Saving…" : chosen && chosen.code === contract.property_code ? "Keep pairing" : "Pair with this property"}</button>
+      </div>
+      {chosen && !ranked.some((r) => r.property.code === pick) && chosenCheck && (chosenCheck.conflicts.length > 0 || chosenCheck.reasons.length > 0) && (
+        <div style={{ marginTop: 6, fontSize: 12 }}>
+          {chosenCheck.reasons.length > 0 && <div style={{ opacity: 0.8 }}>{chosenCheck.reasons.join(" · ")}</div>}
+          {chosenCheck.conflicts.map((x, k) => <div key={k} style={{ color: x.high ? "#ff8f86" : "#ffd98a" }}>⚠ {x.text}</div>)}
+        </div>
+      )}
+      {err && <div style={{ color: "#ff8f86", marginTop: 6 }}>{err}</div>}
+    </div>
+  );
+}
+
+// Contract vs tracker, field by field, for the drill-in.
+function ispComparisonRows(c, p, legisItems) {
+  const probe = ispProbe(c), P = ispPropIds(p), prog = p.program || {};
+  const row = (label, cv, tv, status, note) => ({ label, cv: cv == null || cv === "" ? null : String(cv), tv: tv == null || tv === "" ? null : String(tv), status, note });
+  const cmp = (a, b, eq) => (!a || !b) ? "missing" : (eq ? eq(a, b) : String(a).toLowerCase() === String(b).toLowerCase()) ? "match" : "differs";
+  const nm = ispNameCompare(probe.names, P.names);
+  const rows = [
+    row("Property name", probe.names.join(" / "), P.names.filter(Boolean).join(" / "), !probe.names.length ? "missing" : nm.score >= 60 ? "match" : nm.score > 0 ? "similar" : "differs"),
+    row("Street address", probe.streetRaw, P.streetRaw, cmp(probe.street, P.street, (a, b) => a === b || (a.match(/^\d+/) && b.match(/^\d+/) && a.match(/^\d+/)[0] === b.match(/^\d+/)[0] && (a.includes(b.replace(/^\d+\s*/, "")) || b.includes(a.replace(/^\d+\s*/, "")))))),
+    row("City", probe.cityRaw, P.cityRaw, cmp(probe.city, P.city)),
+    row("State", probe.state, P.state, cmp(probe.state, P.state)),
+    row("ZIP", probe.zip, P.zip, cmp(probe.zip, P.zip)),
+    row("Units", probe.units, P.units, cmp(probe.units, P.units, (a, b) => Math.abs(a - b) <= Math.max(2, Math.round(b * 0.05)))),
+    row("Owner vs Client / JV", probe.ownerRaw, [P.clientRaw, P.jvRaw].filter(Boolean).join(" / "), !probe.owner || (!P.client && !P.jv) ? "missing" : ispScoreProperty(probe, p).reasons.some((r) => /owner entity/.test(r)) ? "match" : "differs", "Owner entities are often single-purpose LLCs, so a difference here is common"),
+    row("Executed vs ISP Contract Executed", c.executed_date, prog.ispContractExecuted, !c.executed_date ? "missing" : !prog.ispContractExecuted ? "empty" : c.executed_date === prog.ispContractExecuted ? "match" : "differs"),
+    row("Expiration vs ISP term end", c.expiration_date, prog.ispTermEnd, !c.expiration_date ? "missing" : !prog.ispTermEnd ? "empty" : c.expiration_date === prog.ispTermEnd ? "match" : "differs"),
+  ];
+  const st = probe.state || P.state;
+  const measures = st ? (legisItems || []).filter((i) => i.state === st && i.status !== "Failed") : [];
+  return { rows, state: st, measures };
+}
+const ISP_CMP_STYLE = { match: { color: "#9be3b0", label: "Match" }, similar: { color: "#ffd98a", label: "Similar" }, differs: { color: "#ff8f86", label: "Differs" }, missing: { color: "var(--mut)", label: "Not on both" }, empty: { color: "#8fb8ff", label: "Not on tracker" } };
+
 function IspStatusPill({ c }) {
   if (c.status === "done") return c.verified ? <span className="pill p-Paid" title="Checked against the PDF">Verified</span> : <span className="pill" style={{ background: "#2a3d6d", color: "#c4d1e8" }} title="Read by Claude; not yet checked against the PDF">Extracted</span>;
   if (c.status === "error") return <span className="pill p-Overdue" title={c.error || ""}>Couldn't read</span>;
@@ -7664,24 +7857,24 @@ function IspFlag({ v, label }) {
   return <span className="pill" style={v ? { background: "#6e2a28", color: "#ffc7c1" } : { background: "#1f4a2e", color: "#9be3b0" }} title={label}>{v ? "Yes" : "No"}</span>;
 }
 
-function IspContractsTable({ rows, byCode, onOpen, showProperty }) {
+function IspContractsTable({ rows, byCode, onOpen, showProperty, properties }) {
   return (
     <div className="tw ac-table">
       <table>
         <thead><tr>
           {showProperty && <th>Property</th>}<th>Provider</th><th>Agreement</th><th>Executed</th><th>Term</th><th>Expires</th>
-          <th>Escalator</th><th>Rev share (retail)</th><th>Door fees</th><th>Paper</th><th>Anti-bulk</th><th>Exclusive</th><th>Status</th>
+          <th>Escalator</th><th>Rev share (retail)</th><th>Door fees</th><th>Paper</th><th>Anti-bulk</th><th>Exclusive</th><th>Tracker match</th><th>Status</th>
         </tr></thead>
         <tbody>
           {rows.length === 0 ? (
-            <tr><td colSpan={showProperty ? 13 : 12} style={{ color: "var(--mut)" }}>No ISP contracts yet. Upload them from Import / Export → Import → ISP Contracts.</td></tr>
+            <tr><td colSpan={showProperty ? 14 : 13} style={{ color: "var(--mut)" }}>No ISP contracts yet. Upload them from Import / Export → Import → ISP Contracts.</td></tr>
           ) : rows.map((c) => {
             const p = byCode[c.property_code];
             const mo = ispMonthsToExpiry(c);
             return (
               <tr key={c.id} className="click" onClick={() => onOpen(c)} style={{ cursor: "pointer", whiteSpace: "nowrap" }}>
                 {showProperty && <td title={p ? `${p.code} ${p.name}` : c.property_name_in_contract || ""} style={{ maxWidth: "clamp(180px, 14vw, 360px)", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {p ? <><span className="id">{p.code}</span> {p.name}</> : <span style={{ color: "var(--mut)" }}>Unassigned{c.property_name_in_contract ? ` · ${c.property_name_in_contract}` : ""}</span>}</td>}
+                  {p ? <><span className="id">{p.code}</span> {p.name}</> : <span style={{ color: "#d3cdfa" }}>Unpaired{c.property_name_in_contract ? ` · ${c.property_name_in_contract}` : ""}</span>}</td>}
                 <td style={{ fontWeight: 600 }}>{c.provider || (c.status === "done" ? "—" : c.file_name)}</td>
                 <td title={c.agreement_title || ""} style={{ maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis" }}>{c.agreement_type || c.agreement_title || "—"}</td>
                 <td>{ispDate(c.executed_date)}</td>
@@ -7693,6 +7886,7 @@ function IspContractsTable({ rows, byCode, onOpen, showProperty }) {
                 <td>{c.contract_paper || "—"}</td>
                 <td><IspFlag v={c.anti_bulk} label={c.anti_bulk_detail || ""} /></td>
                 <td><IspFlag v={c.exclusive} label={c.exclusivity_detail || ""} /></td>
+                <td><IspPairPill c={c} properties={properties || []} /></td>
                 <td><IspStatusPill c={c} /></td>
               </tr>
             );
@@ -7703,7 +7897,9 @@ function IspContractsTable({ rows, byCode, onOpen, showProperty }) {
   );
 }
 
-// Upload one or more ISP contract PDFs; each is stored, logged and read by Claude.
+// Upload one or more ISP contract PDFs; each is stored, read by Claude, then
+// paired to its tracker property: automatically on a clear high-likelihood
+// match, otherwise from the recommended property (or any other) you confirm.
 function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCode, onChanged }) {
   const [code, setCode] = useState(fixedPropertyCode || "auto");
   const [items, setItems] = useState([]);
@@ -7723,20 +7919,34 @@ function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCo
       const i = start + k;
       try {
         if (!/\.pdf$/i.test(f.name) && f.type !== "application/pdf") throw new Error("Only PDF files can be read.");
-        const folder = code === "auto" ? "unassigned" : code;
+        const folder = code === "auto" ? "unpaired" : code;
         const path = `isp/${folder}/${Date.now()}-${f.name.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
         const up = await supabaseClient.storage.from(ISP_BUCKET).upload(path, f, { contentType: "application/pdf", upsert: false });
         if (up.error) throw new Error(`Upload failed: ${up.error.message}`);
-        const ins = await supabaseClient.from("isp_contracts").insert([{ property_code: code === "auto" ? null : code, file_path: path, file_name: f.name, file_size: f.size, status: "pending", uploaded_by: userEmail || null }]).select().single();
+        const ins = await supabaseClient.from("isp_contracts").insert([{ property_code: null, file_path: path, file_name: f.name, file_size: f.size, status: "pending", uploaded_by: userEmail || null }]).select().single();
         if (ins.error) throw new Error(`Saving failed: ${ins.error.message}`);
         if (onChanged) onChanged();
         setItem(i, { state: "Reading with Claude… (about a minute)" });
         let c = await ispExtract(supabaseClient, ins.data.id);
-        if (code === "auto" && c) {
-          const p = ispMatchProperty(c, properties);
-          if (p) { const r = await supabaseClient.from("isp_contracts").update({ property_code: p.code }).eq("id", c.id).select().single(); if (!r.error) c = r.data; }
+        if (!c) throw new Error("Nothing came back from the contract read.");
+        const ranked = ispRankProperties(c, properties);
+        if (code !== "auto") {
+          // Property chosen up front: pair it, and surface any identifier conflicts.
+          const p = properties.find((x) => x.code === code);
+          c = await ispSavePair(supabaseClient, c, p, ranked[0] && ranked[0].property.code === code ? "confirmed" : "manual", ranked, userEmail);
+          const st = ispPairStatus(c, properties);
+          const alt = ranked[0] && ranked[0].property.code !== code && ranked[0].confidence === "High" ? ranked[0] : null;
+          setItem(i, { contract: c, ok: st.key === "paired", state: `Read · ${c.provider || "provider not found"} · paired with ${p.code} ${p.name}`,
+            warn: st.key === "mismatch" || st.key === "check" ? (st.r.conflicts.map((x) => x.text).join("; ") || "Weak match on identifiers") + (alt ? `. Best match is ${alt.property.code} ${alt.property.name}.` : "") : null });
+        } else {
+          const auto = ispAutoPick(ranked);
+          if (auto) {
+            c = await ispSavePair(supabaseClient, c, auto.property, "auto", ranked, userEmail);
+            setItem(i, { contract: c, ok: true, state: `Read · ${c.provider || "provider not found"} · paired with ${auto.property.code} ${auto.property.name} (High: ${auto.reasons.join(", ")})` });
+          } else {
+            setItem(i, { contract: c, picking: true, state: `Read · ${c.provider || "provider not found"} · confirm the property` });
+          }
         }
-        setItem(i, { state: c ? `Done · ${c.provider || "provider not found"}${c.property_code ? ` · ${c.property_code}` : code === "auto" ? " · no property match, assign it in the drill-in" : ""}` : "Done", ok: true });
       } catch (x) {
         setItem(i, { state: x.message || String(x), err: true });
       }
@@ -7751,17 +7961,29 @@ function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCo
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
           <span className="field-label" style={{ margin: 0 }}>Property</span>
           <select value={code} onChange={(e) => setCode(e.target.value)} disabled={busy} style={{ minWidth: 300 }}>
-            <option value="auto">Match automatically from the contract</option>
+            <option value="auto">Match from the contract (recommended)</option>
             {sorted.map((p) => <option key={p.id} value={p.code}>{p.code} {p.name}</option>)}
           </select>
         </div>
       )}
       <input ref={fileRef} type="file" accept="application/pdf,.pdf" multiple style={{ display: "none" }} onChange={onFiles} />
       <button className="btn-primary" disabled={busy} onClick={() => fileRef.current && fileRef.current.click()}>{busy ? "Working…" : "Upload ISP contract PDFs…"}</button>
-      <div className="dim" style={{ fontSize: 11.5, marginTop: 6 }}>Each PDF is stored with the property and read by Claude for provider, dates, term, escalator, revenue share, door fees, contract paper, anti-bulk, exclusivity and every line item. Check the results against the PDF in the drill-in.</div>
+      <div className="dim" style={{ fontSize: 11.5, marginTop: 6 }}>Each PDF is read by Claude, then paired to its tracker property using the name, street address, city, state, ZIP, units and owner entity in the contract. A clear match pairs automatically; otherwise you confirm the recommended property or pick the right one. Conflicts on state, ZIP, street address or units are flagged.</div>
       {items.length > 0 && (
         <div style={{ marginTop: 10, fontSize: 13 }}>
-          {items.map((x, i) => <div key={i} style={{ padding: "3px 0", color: x.err ? "#ff8f86" : undefined }}><b>{x.name}</b> — {x.state}</div>)}
+          {items.map((x, i) => (
+            <div key={i} style={{ padding: "6px 0", borderTop: i ? "1px solid var(--border, #2c4170)" : "none" }}>
+              <div style={{ color: x.err ? "#ff8f86" : undefined }}>
+                <b>{x.name}</b> — {x.state}
+                {x.contract && !x.picking && !fixedPropertyCode && <button className="link" style={{ marginLeft: 8 }} onClick={() => setItem(i, { picking: true })}>Change property</button>}
+              </div>
+              {x.warn && <div style={{ color: "#ff8f86", fontSize: 12.5, marginTop: 2 }}>⚠ {x.warn}{fixedPropertyCode ? "" : " "}{!fixedPropertyCode && !x.picking && <button className="link" onClick={() => setItem(i, { picking: true })}>Pick another property</button>}</div>}
+              {x.contract && x.picking && (
+                <IspPairPicker contract={x.contract} properties={properties} supabaseClient={supabaseClient} userEmail={userEmail} compact
+                  onPaired={(c) => { const p = properties.find((q) => q.code === c.property_code); setItem(i, { contract: c, picking: false, ok: true, warn: null, state: `Read · ${c.provider || "provider not found"} · paired with ${p ? `${p.code} ${p.name}` : c.property_code}` }); if (onChanged) onChanged(); }} />
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -7780,7 +8002,8 @@ const ISP_EDIT_FIELDS = [
   ["notes", "Notes", "text"],
 ];
 
-function IspContractDetail({ contract, properties, supabaseClient, onClose, onChanged, onOpenProperty, onOpenLegislation }) {
+function IspContractDetail({ contract, properties, supabaseClient, onClose, onChanged, onOpenProperty, onOpenLegislation, legisItems, userEmail, onApplyToTracker }) {
+  const [repair, setRepair] = useState(false);
   const [c, setC] = useState(contract);
   const [edit, setEdit] = useState(false);
   const [draft, setDraft] = useState({});
@@ -7873,13 +8096,66 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
         {msg && <div style={{ fontSize: 13, color: /couldn|fail|isn't|error/i.test(msg) ? "#ff8f86" : undefined, marginBottom: 10 }}>{msg}</div>}
         {c.status === "error" && <div className="banner" style={{ color: "#ffc7c1", marginBottom: 10 }}>{c.error}</div>}
 
-        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12, fontSize: 13 }}>
-          <span className="field-label" style={{ margin: 0 }}>Property</span>
-          <select value={c.property_code || ""} disabled={busy} onChange={(e) => save({ property_code: e.target.value || null })} style={{ minWidth: 280 }}>
-            <option value="">Not linked</option>
-            {sorted.map((p) => <option key={p.id} value={p.code}>{p.code} {p.name}</option>)}
-          </select>
-        </div>
+        <div className="section-header">Tracker match</div>
+        {c.status !== "done" ? <div className="dim" style={{ fontSize: 13, margin: "6px 0 14px" }}>Pairing runs once the contract has been read.</div>
+          : (!property || repair) ? (
+            <div style={{ marginBottom: 14 }}>
+              {!property && <div style={{ fontSize: 13, color: "#d3cdfa", margin: "4px 0" }}>Not paired to a tracker property yet.</div>}
+              <IspPairPicker contract={c} properties={properties} supabaseClient={supabaseClient} userEmail={userEmail} onPaired={(d) => { setC(d); setRepair(false); if (onChanged) onChanged(); }} />
+              {repair && <button className="link" style={{ marginTop: 6 }} onClick={() => setRepair(false)}>Cancel</button>}
+            </div>
+          ) : (() => {
+            const ps = ispPairStatus(c, properties);
+            const cmp = ispComparisonRows(c, property, legisItems);
+            const fills = [];
+            if (c.executed_date && c.executed_date !== property.program.ispContractExecuted) fills.push(["ispContractExecuted", "ISP Contract Executed", property.program.ispContractExecuted, c.executed_date]);
+            if (c.expiration_date && c.expiration_date !== property.program.ispTermEnd) fills.push(["ispTermEnd", "ISP term end", property.program.ispTermEnd, c.expiration_date]);
+            return (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", margin: "4px 0 8px", fontSize: 13 }}>
+                  <span className="pill" style={ISP_PAIR_STYLE[ps.key]}>{ps.label}</span>
+                  <span>Paired with <b>{property.code} {property.name}</b>{c.match && c.match.method ? <span style={{ opacity: 0.7 }}> · {c.match.method === "auto" ? "auto-paired" : c.match.method === "confirmed" ? "recommended match confirmed" : "chosen by hand"}{c.match.by ? ` by ${clFirstName(c.match.by)}` : ""}</span> : null}</span>
+                  <button className="link" onClick={() => setRepair(true)}>Change property</button>
+                </div>
+                {ps.r && ps.r.conflicts.filter((x) => x.high).length > 0 && (
+                  <div className="banner" style={{ color: "#ffc7c1", background: "#3a1c1b", borderRadius: 8, marginBottom: 8 }}>
+                    High-likelihood identifiers don't match: {ps.r.conflicts.filter((x) => x.high).map((x) => x.text).join("; ")}. Check that this is the right property, or change it.
+                  </div>
+                )}
+                <div className="tw">
+                  <table>
+                    <thead><tr><th>Identifier</th><th>Contract</th><th>Tracker</th><th>Result</th></tr></thead>
+                    <tbody>
+                      {cmp.rows.map((r) => (
+                        <tr key={r.label}>
+                          <td style={{ whiteSpace: "nowrap" }}>{r.label}</td>
+                          <td style={{ fontSize: 12.5 }}>{r.cv ? (/Executed|Expiration/.test(r.label) ? ispDate(r.cv) : r.cv) : <span style={{ color: "var(--mut)" }}>—</span>}</td>
+                          <td style={{ fontSize: 12.5 }}>{r.tv ? (/Executed|Expiration/.test(r.label) ? ispDate(r.tv) : r.tv) : <span style={{ color: "var(--mut)" }}>—</span>}</td>
+                          <td style={{ whiteSpace: "nowrap", color: ISP_CMP_STYLE[r.status].color }} title={r.note || ""}>{ISP_CMP_STYLE[r.status].label}</td>
+                        </tr>
+                      ))}
+                      <tr>
+                        <td>State legislation</td>
+                        <td colSpan={2} style={{ fontSize: 12.5 }}>{cmp.state ? `${cmp.measures.length} tracked measure${cmp.measures.length === 1 ? "" : "s"} in ${US_STATE_NAMES[cmp.state] || cmp.state}${cmp.measures.length ? `: ${cmp.measures.slice(0, 3).map((m) => m.title || m.measure).join("; ")}${cmp.measures.length > 3 ? "…" : ""}` : ""}${c.anti_bulk && cmp.measures.length ? ". This contract has an anti-bulk clause; check it against these." : ""}` : "No state on the contract or tracker"}</td>
+                        <td>{cmp.state && onOpenLegislation && <button className="link" onClick={() => onOpenLegislation(cmp.state)}>Open map →</button>}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                {fills.length > 0 && onApplyToTracker && (
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 8, fontSize: 13 }}>
+                    <span>{fills.map(([, l, oldv, newv]) => `${l}: ${oldv ? ispDate(oldv) : "empty"} → ${ispDate(newv)}`).join(" · ")}</span>
+                    <button className="btn-ghost" disabled={busy} onClick={() => {
+                      const overwrite = fills.filter(([, , oldv]) => oldv);
+                      if (overwrite.length && !window.confirm(`This replaces values already on ${property.code}:\n\n${overwrite.map(([, l, o, n]) => `${l}: ${ispDate(o)} → ${ispDate(n)}`).join("\n")}\n\nContinue?`)) return;
+                      onApplyToTracker(property.code, Object.fromEntries(fills.map(([k, , , v]) => [k, v])), fills, c);
+                      setMsg(`Updated ${property.code}: ${fills.map(([, l]) => l).join(" and ")}.`);
+                    }}>Apply to tracker</button>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
           {[["Anti-bulk", c.anti_bulk, c.anti_bulk_detail], ["Exclusive", c.exclusive, c.exclusivity_detail]].map(([l, v, d]) => (
@@ -7964,14 +8240,16 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
 }
 
 // Portfolio-wide ISP contracts page, laid out like Advisory Contracts.
-function IspContractsView({ contracts, properties, supabaseClient, onChanged, onOpenProperty, onOpenLegislation }) {
+function IspContractsView({ contracts, properties, supabaseClient, onChanged, onOpenProperty, onOpenLegislation, legisItems, userEmail, onApplyToTracker }) {
   const [tab, setTab] = useState("all");
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(null);
   const byCode = useMemo(() => { const m = {}; properties.forEach((p) => { m[p.code] = p; }); return m; }, [properties]);
   const list = contracts || [];
   const expiring = list.filter((c) => { const m = ispMonthsToExpiry(c); return m != null && m >= 0 && m <= 12; });
-  const scoped = tab === "antibulk" ? list.filter((c) => c.anti_bulk) : tab === "exclusive" ? list.filter((c) => c.exclusive) : tab === "expiring" ? expiring : tab === "review" ? list.filter((c) => c.status !== "done" || !c.verified || !c.property_code) : list;
+  const pairKey = (c) => ispPairStatus(c, properties).key;
+  const mismatched = list.filter((c) => ["unpaired", "mismatch", "check"].includes(pairKey(c)));
+  const scoped = tab === "antibulk" ? list.filter((c) => c.anti_bulk) : tab === "exclusive" ? list.filter((c) => c.exclusive) : tab === "expiring" ? expiring : tab === "match" ? mismatched : tab === "review" ? list.filter((c) => c.status !== "done" || !c.verified || pairKey(c) !== "paired") : list;
   const q = search.trim().toLowerCase();
   const shown = scoped.filter((c) => { if (!q) return true; const p = byCode[c.property_code]; return `${c.provider || ""} ${c.agreement_title || ""} ${c.file_name || ""} ${c.property_name_in_contract || ""} ${p ? `${p.code} ${p.name} ${(p.program.attributes || {}).Client || ""}` : ""}`.toLowerCase().includes(q); });
   const propsCovered = new Set(list.map((c) => c.property_code).filter(Boolean)).size;
@@ -7989,23 +8267,23 @@ function IspContractsView({ contracts, properties, supabaseClient, onChanged, on
           <div className="kpi"><div className="v">{expiring.length}</div><div className="k">Expiring within 12 months</div></div>
         </div>
         <div className="tabs" role="tablist">
-          {[["all", `All (${list.length})`], ["antibulk", "Anti-bulk"], ["exclusive", "Exclusive"], ["expiring", "Expiring ≤ 12 mo"], ["review", "Needs review"]].map(([k, l]) => (
+          {[["all", `All (${list.length})`], ["match", `Pairing issues (${mismatched.length})`], ["antibulk", "Anti-bulk"], ["exclusive", "Exclusive"], ["expiring", "Expiring ≤ 12 mo"], ["review", "Needs review"]].map(([k, l]) => (
             <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>
           ))}
         </div>
         <div className="toolbar">
           <input type="text" placeholder="Search by property, client or provider" value={search} onChange={(e) => setSearch(e.target.value)} style={{ minWidth: 280 }} aria-label="Search ISP contracts" />
         </div>
-        <IspContractsTable rows={shown} byCode={byCode} onOpen={setOpen} showProperty />
-        <p className="foot">Terms are read from each PDF by Claude; check them against the PDF and tick "Verified" in the drill-in. "Needs review" lists contracts still reading, not yet verified, or not linked to a property.</p>
+        <IspContractsTable rows={shown} byCode={byCode} onOpen={setOpen} showProperty properties={properties} />
+        <p className="foot">Terms are read from each PDF by Claude; check them against the PDF and tick "Verified" in the drill-in. Tracker match compares the contract's name, street address, city, state, ZIP, units and owner entity with the paired property: Paired (identifiers agree), Check (minor differences), Mismatch (state, ZIP, street address or units disagree) or Unpaired.</p>
       </div>
-      {openC && <IspContractDetail contract={openC} properties={properties} supabaseClient={supabaseClient} onClose={() => setOpen(null)} onChanged={onChanged} onOpenProperty={onOpenProperty} onOpenLegislation={(st) => { setOpen(null); onOpenLegislation(st); }} />}
+      {openC && <IspContractDetail contract={openC} properties={properties} supabaseClient={supabaseClient} onClose={() => setOpen(null)} onChanged={onChanged} onOpenProperty={onOpenProperty} onOpenLegislation={(st) => { setOpen(null); onOpenLegislation(st); }} legisItems={legisItems} userEmail={userEmail} onApplyToTracker={onApplyToTracker} />}
     </div>
   );
 }
 
 // The property record's ISP Contracts — Due Diligence repository.
-function IspPropertyContractsModal({ property, contracts, properties, supabaseClient, userEmail, onClose, onChanged, onOpenLegislation }) {
+function IspPropertyContractsModal({ property, contracts, properties, supabaseClient, userEmail, onClose, onChanged, onOpenLegislation, legisItems, onApplyToTracker }) {
   const [open, setOpen] = useState(null);
   const rows = (contracts || []).filter((c) => c.property_code === property.code);
   const byCode = { [property.code]: property };
@@ -8025,9 +8303,9 @@ function IspPropertyContractsModal({ property, contracts, properties, supabaseCl
           <div style={{ flex: 1, minWidth: 300 }}><IspUploadPanel properties={properties} supabaseClient={supabaseClient} userEmail={userEmail} fixedPropertyCode={property.code} onChanged={onChanged} /></div>
           {st && onOpenLegislation && <button className="btn-ghost" onClick={() => onOpenLegislation(st)}>View {US_STATE_NAMES[st]} legislation →</button>}
         </div>
-        <div className="proto-dash" style={{ background: "transparent" }}><IspContractsTable rows={rows} byCode={byCode} onOpen={setOpen} /></div>
+        <div className="proto-dash" style={{ background: "transparent" }}><IspContractsTable rows={rows} byCode={byCode} onOpen={setOpen} properties={properties} /></div>
       </div>
-      {openC && <IspContractDetail contract={openC} properties={properties} supabaseClient={supabaseClient} onClose={() => setOpen(null)} onChanged={onChanged} onOpenLegislation={(st2) => { setOpen(null); onOpenLegislation(st2); }} />}
+      {openC && <IspContractDetail contract={openC} properties={properties} supabaseClient={supabaseClient} onClose={() => setOpen(null)} onChanged={onChanged} onOpenLegislation={(st2) => { setOpen(null); onOpenLegislation(st2); }} legisItems={legisItems} userEmail={userEmail} onApplyToTracker={onApplyToTracker} />}
     </div>
   );
 }
@@ -9709,6 +9987,14 @@ function App() {
     supabaseClient.from("isp_contracts").select("*").order("executed_date", { ascending: false, nullsFirst: false }).order("id", { ascending: false })
       .then(({ data, error }) => { if (!error && data) setIspContracts(data); });
   }
+  // Fills ISP Contract Executed / ISP term end on a property from a paired ISP contract, logged in the Change Log.
+  const applyIspToTracker = (code, patch, fills, contract) => {
+    setProperties((prev) => prev.map((p) => p.code !== code ? p : { ...p, program: { ...p.program, ...patch } }));
+    const p = properties.find((x) => x.code === code);
+    supabaseClient.from("master_sync_log").insert(fills.map(([, label, oldv, newv]) => ({ property_code: code, property_name: p ? p.name : null, action: "update", field: label,
+      old_value: oldv || null, new_value: newv, reason: `From ISP contract ${contract.provider || contract.file_name}${contract.agreement_title ? ` (${contract.agreement_title})` : ""}`, source: "ISP contract" })))
+      .then(() => loadChangeLog());
+  };
   const openLegislation = (st) => { setIspFor(null); setProgramPropertyId(null); setMapFocus({ state: st, n: Date.now() }); setView("map"); };
   const [phaseSel, setPhaseSel] = useState(null);
   const [econModelOpen, setEconModelOpen] = useState(false);
@@ -10344,11 +10630,13 @@ function App() {
         <ClientMapView properties={properties} onOpenProperty={(p) => openProgram(p)} legislation={legislation} onSaveLegislation={saveLegislation} userEmail={session && session.user ? session.user.email : null} focus={mapFocus} />
       )}
       {view === "isp" && (
-        <IspContractsView contracts={ispContracts} properties={properties} supabaseClient={supabaseClient} onChanged={loadIspContracts} onOpenProperty={(p) => openProgram(p)} onOpenLegislation={openLegislation} />
+        <IspContractsView contracts={ispContracts} properties={properties} supabaseClient={supabaseClient} onChanged={loadIspContracts} onOpenProperty={(p) => openProgram(p)} onOpenLegislation={openLegislation}
+          legisItems={(legislation && legislation.items) || LEGIS_SEED} userEmail={session && session.user ? session.user.email : null} onApplyToTracker={applyIspToTracker} />
       )}
       {ispFor && properties.find((p) => p.code === ispFor) && (
         <IspPropertyContractsModal property={properties.find((p) => p.code === ispFor)} contracts={ispContracts} properties={properties} supabaseClient={supabaseClient}
-          userEmail={session && session.user ? session.user.email : null} onClose={() => setIspFor(null)} onChanged={loadIspContracts} onOpenLegislation={openLegislation} />
+          userEmail={session && session.user ? session.user.email : null} onClose={() => setIspFor(null)} onChanged={loadIspContracts} onOpenLegislation={openLegislation}
+          legisItems={(legislation && legislation.items) || LEGIS_SEED} onApplyToTracker={applyIspToTracker} />
       )}
       {view === "changelog" && (
         <ChangeLogView
