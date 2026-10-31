@@ -7667,7 +7667,14 @@ function ispProbe(c) {
   const zip = String(x.property_zip || (sz && sz[2]) || "").replace(/\D/g, "").slice(0, 5);
   const street = ispStreetOnly(x.property_street) || (parts.length >= 2 ? ispStreetOnly(parts[0]) : "");
   const city = x.property_city || (parts.length >= 3 ? parts[parts.length - 2] : parts.length === 2 && !street ? parts[0] : "");
-  const names = [c.property_name_in_contract, ...(Array.isArray(x.other_property_names) ? x.other_property_names : [])].filter((n) => n && String(n).trim());
+  const base = [c.property_name_in_contract, ...(Array.isArray(x.other_property_names) ? x.other_property_names : [])].filter((n) => n && String(n).trim());
+  // "Broadstone Ridge (now Annett / The Five by Arium)", "Capitol Hill Station (CH TOD), now Connection on Broadway"
+  const extra = [];
+  base.forEach((n) => {
+    String(n).replace(/\(([^)]*)\)/g, (_, inner) => { inner.split(/\/|;|,/).forEach((t) => extra.push(t)); return ""; });
+    const now = String(n).match(/\bnow\s+([^()]+)$/i); if (now) now[1].split(/\/|;/).forEach((t) => extra.push(t));
+  });
+  const names = [...base, ...extra.map((t) => String(t).replace(/^\s*(now|formerly|fka|aka|d\/b\/a)\s+/i, "").trim()).filter((t) => t && !/^\d/.test(t))];
   return { names, street: ispAddr(street), streetRaw: street, city: String(city).toLowerCase().trim(), cityRaw: city, state, zip, units: Number(c.units) || null, owner: dupNorm(c.owner_entity), ownerRaw: c.owner_entity || "" };
 }
 function ispPropIds(p) {
@@ -7678,7 +7685,9 @@ function ispPropIds(p) {
     client: dupNorm(a.Client), jv: dupNorm(a["JV Partner"]), clientRaw: a.Client || "", jvRaw: a["JV Partner"] || "" };
 }
 function ispNameCompare(namesA, namesB) {
-  let best = { score: 0, label: null, jac: 0 };
+  let best = { score: 0, label: null, jac: 0, match: false };
+  // Name match: a tracker name (current or previous) appears whole in the contract's property name.
+  namesB.forEach((nb) => { const B = dupNameTokens(nb); if (B.length && B.join("").length >= 5 && namesA.some((na) => { const A = dupNameTokens(na); return B.every((t) => A.includes(t)); })) { best.match = true; best.matchName = nb; } });
   namesA.forEach((na) => namesB.forEach((nb) => {
     const A = dupNameTokens(na), B = dupNameTokens(nb);
     if (!A.length || !B.length) return;
@@ -7690,8 +7699,9 @@ function ispNameCompare(namesA, namesB) {
     if (A.join(" ") === B.join(" ")) { s = 60; label = `same name ("${nb}")`; }
     else if (contained || jac >= 0.6) { s = Math.round(45 * Math.max(jac, contained ? 0.75 : 0)); label = `similar name ("${na}" / "${nb}", ${Math.round(jac * 100)}% word overlap)`; }
     else if (jac >= 0.3) { s = Math.round(25 * jac); label = `partly similar name ("${na}" / "${nb}")`; }
-    if (s > best.score) best = { score: s, label, jac };
+    if (s > best.score) best = { ...best, score: s, label, jac };
   }));
+  if (best.match && best.score < 60) { best.score = 60; best.label = `same name ("${best.matchName}")`; }
   return best;
 }
 // Scores one tracker property against a contract: { score, reasons[], conflicts[{text, high}] }
@@ -7735,9 +7745,10 @@ function ispScoreProperty(probe, p) {
     if ((P.client && (probe.owner.includes(P.client) || P.client.includes(probe.owner))) || (P.jv && (probe.owner.includes(P.jv) || P.jv.includes(probe.owner)))) { score += 15; reasons.push(`owner entity matches client (${P.jvRaw && probe.owner.includes(P.jv) ? P.jvRaw : P.clientRaw})`); }
     else if (namedAfter) { score += 20; reasons.push(`owner entity is named after the property (${probe.ownerRaw})`); }
   }
-  return { score, reasons, conflicts, nameScore: nm.score };
+  return { score, reasons, conflicts, nameScore: nm.score, nameMatch: !!nm.match };
 }
-const ispConfidence = (r) => (r.score >= 100 && !r.conflicts.some((x) => x.high)) ? "High" : (r.score >= 55 && !r.conflicts.some((x) => x.high)) ? "Medium" : "Low";
+// A name match (current or previous tracker name) is a match; address/unit differences are noted, not blocking.
+const ispConfidence = (r) => r.nameMatch ? "High" : (r.score >= 100 && !r.conflicts.some((x) => x.high)) ? "High" : (r.score >= 55 && !r.conflicts.some((x) => x.high)) ? "Medium" : "Low";
 // Ranked tracker candidates for a contract, best first (top 5).
 function ispRankProperties(c, properties) {
   const probe = ispProbe(c);
@@ -7748,6 +7759,9 @@ function ispRankProperties(c, properties) {
 }
 // Auto-pair only on a clear, conflict-free, high-likelihood match well ahead of the runner-up.
 function ispAutoPick(ranked) {
+  const named = ranked.filter((r) => r.nameMatch);
+  if (named.length === 1) return named[0];
+  if (named.length > 1) return null; // two tracker properties share the name: let the user pick
   const [a, b] = ranked;
   if (!a || a.confidence !== "High") return null;
   if (b && a.score - b.score < 40) return null;
@@ -7763,6 +7777,7 @@ function ispPairStatus(c, properties) {
   const byHand = m.method === "manual" || m.method === "confirmed";
   if (byHand) r.reasons = [...r.reasons, `paired by hand${m.by ? ` by ${m.by}` : ""}${m.at ? ` on ${String(m.at).slice(0, 10)}` : ""}`];
   // A person confirmed this pairing despite the conflicts: keep it visible as Check, not Mismatch.
+  if (r.nameMatch) return { key: "paired", label: "Paired", r: { ...r, conflicts: r.conflicts.map((x) => ({ ...x, note: true })) } };
   if (r.conflicts.some((x) => x.high)) return byHand ? { key: "check", label: "Check", r } : { key: "mismatch", label: "Mismatch", r };
   if (r.conflicts.length || ispConfidence(r) === "Low") return { key: "check", label: "Check", r };
   return { key: "paired", label: "Paired", r };
@@ -7770,7 +7785,7 @@ function ispPairStatus(c, properties) {
 const ISP_PAIR_STYLE = { paired: { background: "#1f5a34", color: "#b8efc7" }, check: { background: "#5a4a1a", color: "#ffd98a" }, mismatch: { background: "#6e2a28", color: "#ffc7c1" }, unpaired: { background: "#3d3670", color: "#d3cdfa" }, pending: { background: "transparent", color: "var(--mut)" } };
 function IspPairPill({ c, properties }) {
   const s = ispPairStatus(c, properties);
-  const tip = s.r ? [...s.r.reasons, ...s.r.conflicts.map((x) => `⚠ ${x.text}`)].join("\n") : s.key === "unpaired" ? "Not paired to a tracker property yet" : "";
+  const tip = s.r ? [...s.r.reasons, ...s.r.conflicts.map((x) => `${x.note ? "Note:" : "⚠"} ${x.text}`)].join("\n") : s.key === "unpaired" ? "Not paired to a tracker property yet" : "";
   return <span className="pill" style={ISP_PAIR_STYLE[s.key]} title={tip}>{s.label}</span>;
 }
 async function ispSavePair(supabaseClient, c, property, method, ranked, userEmail) {
@@ -7795,7 +7810,7 @@ function IspPairPicker({ contract, properties, supabaseClient, userEmail, onPair
   const chosenCheck = chosen ? (ranked.find((r) => r.property.code === pick) || { ...ispScoreProperty(ispProbe(contract), chosen) }) : null;
   const confirm = async () => {
     if (!chosen) return;
-    if (chosenCheck && chosenCheck.conflicts.some((x) => x.high) && !window.confirm(`The contract doesn't match ${chosen.code} ${chosen.name} on:\n\n${chosenCheck.conflicts.filter((x) => x.high).map((x) => "• " + x.text).join("\n")}\n\nPair it anyway?`)) return;
+    if (chosenCheck && !chosenCheck.nameMatch && chosenCheck.conflicts.some((x) => x.high) && !window.confirm(`The contract doesn't match ${chosen.code} ${chosen.name} on:\n\n${chosenCheck.conflicts.filter((x) => x.high).map((x) => "• " + x.text).join("\n")}\n\nPair it anyway?`)) return;
     setBusy(true); setErr(null);
     try { const d = await ispSavePair(supabaseClient, contract, chosen, top && pick === top.property.code ? "confirmed" : "manual", ranked, userEmail); onPaired && onPaired(d); }
     catch (x) { setErr(`Couldn't save: ${x.message}`); }
@@ -8267,7 +8282,7 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
                   <span>Paired with <b>{property.code} {property.name}</b>{c.match && c.match.method ? <span style={{ opacity: 0.7 }}> · {c.match.method === "auto" ? "auto-paired" : c.match.method === "confirmed" ? "recommended match confirmed" : "chosen by hand"}{c.match.by ? ` by ${clFirstName(c.match.by)}` : ""}</span> : null}</span>
                   <button className="link" onClick={() => setRepair(true)}>Change property</button>
                 </div>
-                {ps.r && ps.r.conflicts.filter((x) => x.high).length > 0 && (
+                {ps.r && ps.r.conflicts.filter((x) => x.high && !x.note).length > 0 && (
                   <div className="banner" style={{ color: "#ffc7c1", background: "#3a1c1b", borderRadius: 8, marginBottom: 8 }}>
                     High-likelihood identifiers don't match: {ps.r.conflicts.filter((x) => x.high).map((x) => x.text).join("; ")}. Check that this is the right property, or change it.
                   </div>
