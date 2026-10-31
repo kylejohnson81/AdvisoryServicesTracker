@@ -4505,7 +4505,7 @@ function NoteBody({ text }) {
   );
 }
 
-function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSetDecision, onSetPriority, onUpdateAttribute, onUpdateNotes, onUpdateNotesLog, onSetDDDate, onToggleDueDiligence, onToggleServiceOption, onSetServiceContractDate, onSetISPDate, onSetExpectedTCO, onSetDeploymentLiveDate, onSetBillingMilestone, ispCount, onOpenIspContracts, regionsList, onAddRegion, currentUserEmail }) {
+function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSetDecision, onSetPriority, onUpdateAttribute, onUpdateNotes, onUpdateNotesLog, onSetDDDate, onToggleDueDiligence, onToggleServiceOption, onSetServiceContractDate, onSetISPDate, onSetExpectedTCO, onSetDeploymentLiveDate, onSetBillingMilestone, ispCount, consultCount, onOpenIspContracts, regionsList, onAddRegion, currentUserEmail }) {
   const [notesOpen, setNotesOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState(null);
@@ -4864,7 +4864,10 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
         <div className="field-label" style={{ marginBottom: 6 }}>ISP Contracts — Due Diligence</div>
         <div className="contract-dates-list" style={{ marginBottom: 18 }}>
           <div className="contract-date-row" style={{ cursor: "pointer" }} onClick={() => onOpenIspContracts && onOpenIspContracts()}>
-            <span className="field-label" style={{ margin: 0 }}>{ispCount ? `${ispCount} ISP contract${ispCount === 1 ? "" : "s"} on file` : "No ISP contracts on file"}</span>
+            <span className="field-label" style={{ margin: 0 }}>
+              {ispCount ? `${ispCount} ISP contract${ispCount === 1 ? "" : "s"} on file` : "No ISP contracts on file"}
+              {consultCount > 0 && <span className="pill" style={{ marginLeft: 8, background: "#5a3a1a", color: "#ffd2a0", fontSize: 11 }} title="A consulting agreement is on file for this property">⚑ {consultCount} consulting agreement{consultCount === 1 ? "" : "s"}</span>}
+            </span>
             <button className="btn-primary" onClick={(e) => { e.stopPropagation(); onOpenIspContracts && onOpenIspContracts(); }}>Open repository</button>
           </div>
         </div>
@@ -7309,7 +7312,7 @@ function ImportExportModal({ section: initialSection = "import", onClose, proper
               <button className="btn-primary" onClick={() => reset("contracts")}>Choose</button>)}
             {card("Refresh Billing (Revenue Tracker)", `Upload the CL Advisory Services Revenue Tracker. Replaces the billing shown on the Billing and Overview pages and checks it against Advisory Contracts.${billingImport && billingImport.source_file ? ` Current: ${billingImport.source_file}${billingImport.imported_at ? `, imported ${fmtDate(billingImport.imported_at.slice(0, 10))}` : ""}.` : ""}`,
               <button className="btn-primary" onClick={() => setRevenueOpen(true)}>Choose</button>)}
-            {card("ISP Contracts — Due Diligence", "Upload existing ISP agreement PDFs. Each one is stored with its property and read by Claude for provider, executed date, term, expiration, escalator, revenue share, door fees, contract paper, anti-bulk, exclusivity and every line item. Results show on the ISP Contracts page and the property record.",
+            {card("ISP Contracts — Due Diligence", "Upload existing ISP agreement PDFs, or consulting agreements to flag on their properties. Select many at once. Each one is stored with its property and read by Claude for provider, executed date, term, expiration, escalator, revenue share, door fees, contract paper, anti-bulk, exclusivity and every line item. Results show on the ISP Contracts page and the property record.",
               <button className="btn-primary" onClick={() => reset("isp")}>Choose</button>)}
           </div>
         )}
@@ -7897,11 +7900,46 @@ function IspContractsTable({ rows, byCode, onOpen, showProperty, properties }) {
   );
 }
 
+function IspConsultingTable({ rows, byCode, onOpen, showProperty, properties }) {
+  return (
+    <div className="tw ac-table">
+      <table>
+        <thead><tr>{showProperty && <th>Property</th>}<th>Consultant</th><th>Agreement</th><th>Scope</th><th>Executed</th><th>Term</th><th>Expires</th><th>Tracker match</th><th>Status</th></tr></thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr><td colSpan={showProperty ? 9 : 8} style={{ color: "var(--mut)" }}>No consulting agreements on file.</td></tr>
+          ) : rows.map((c) => {
+            const p = byCode[c.property_code];
+            const mo = ispMonthsToExpiry(c);
+            return (
+              <tr key={c.id} className="click" onClick={() => onOpen(c)} style={{ cursor: "pointer", whiteSpace: "nowrap" }}>
+                {showProperty && <td title={p ? `${p.code} ${p.name}` : ""} style={{ maxWidth: "clamp(180px, 14vw, 360px)", overflow: "hidden", textOverflow: "ellipsis" }}>{p ? <><span className="id">{p.code}</span> {p.name}</> : <span style={{ color: "#d3cdfa" }}>Unpaired{c.property_name_in_contract ? ` · ${c.property_name_in_contract}` : ""}</span>}</td>}
+                <td style={{ fontWeight: 600 }}>{c.consultant || (c.status === "done" ? "—" : c.file_name)}</td>
+                <td title={c.agreement_title || ""} style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>{c.agreement_title || "—"}</td>
+                <td title={c.scope_summary || ""} style={{ maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis" }}>{c.scope_summary || "—"}</td>
+                <td>{ispDate(c.executed_date)}</td>
+                <td>{ispTerm(c)}</td>
+                <td>{ispDate(c.expiration_date)}{mo != null && mo < 0 && <span className="t-chip" style={{ marginLeft: 6 }}>Expired</span>}{mo != null && mo >= 0 && <span className="t-chip t-old" style={{ marginLeft: 6 }}>Active</span>}</td>
+                <td><IspPairPill c={c} properties={properties || []} /></td>
+                <td><IspStatusPill c={c} /></td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // Upload one or more ISP contract PDFs; each is stored, read by Claude, then
 // paired to its tracker property: automatically on a clear high-likelihood
 // match, otherwise from the recommended property (or any other) you confirm.
+const ISP_KINDS = { isp: { label: "ISP agreements", one: "ISP agreement" }, consulting: { label: "Consulting agreements", one: "consulting agreement" } };
+const ISP_CONCURRENCY = 3; // contracts read at once; the rest wait in the queue
+const ispPartyOf = (c) => (c.doc_kind === "consulting" ? c.consultant : c.provider) || null;
 function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCode, onChanged }) {
   const [code, setCode] = useState(fixedPropertyCode || "auto");
+  const [kind, setKind] = useState("isp");
   const [items, setItems] = useState([]);
   const [busy, setBusy] = useState(false);
   const fileRef = React.useRef(null);
@@ -7913,17 +7951,21 @@ function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCo
     e.target.value = "";
     if (!files.length) return;
     const start = items.length;
-    setItems((xs) => [...xs, ...files.map((f) => ({ name: f.name, state: "Uploading…" }))]);
+    const docKind = kind;
+    setItems((xs) => [...xs, ...files.map((f) => ({ name: f.name, kind: docKind, state: "Queued" }))]);
     setBusy(true);
-    await Promise.all(files.map(async (f, k) => {
-      const i = start + k;
+    // Work through the batch a few at a time so a large upload doesn't hit rate limits.
+    let next = 0;
+    const worker = async () => { while (next < files.length) { const k = next++; await one(files[k], start + k); } };
+    const one = async (f, i) => {
+      setItem(i, { state: "Uploading…" });
       try {
         if (!/\.pdf$/i.test(f.name) && f.type !== "application/pdf") throw new Error("Only PDF files can be read.");
         const folder = code === "auto" ? "unpaired" : code;
         const path = `isp/${folder}/${Date.now()}-${f.name.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
         const up = await supabaseClient.storage.from(ISP_BUCKET).upload(path, f, { contentType: "application/pdf", upsert: false });
         if (up.error) throw new Error(`Upload failed: ${up.error.message}`);
-        const ins = await supabaseClient.from("isp_contracts").insert([{ property_code: null, file_path: path, file_name: f.name, file_size: f.size, status: "pending", uploaded_by: userEmail || null }]).select().single();
+        const ins = await supabaseClient.from("isp_contracts").insert([{ doc_kind: docKind, property_code: null, file_path: path, file_name: f.name, file_size: f.size, status: "pending", uploaded_by: userEmail || null }]).select().single();
         if (ins.error) throw new Error(`Saving failed: ${ins.error.message}`);
         if (onChanged) onChanged();
         setItem(i, { state: "Reading with Claude… (about a minute)" });
@@ -7936,24 +7978,26 @@ function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCo
           c = await ispSavePair(supabaseClient, c, p, ranked[0] && ranked[0].property.code === code ? "confirmed" : "manual", ranked, userEmail);
           const st = ispPairStatus(c, properties);
           const alt = ranked[0] && ranked[0].property.code !== code && ranked[0].confidence === "High" ? ranked[0] : null;
-          setItem(i, { contract: c, ok: st.key === "paired", state: `Read · ${c.provider || "provider not found"} · paired with ${p.code} ${p.name}`,
+          setItem(i, { contract: c, ok: st.key === "paired", state: `Read · ${ispPartyOf(c) || "party not found"} · paired with ${p.code} ${p.name}`,
             warn: st.key === "mismatch" || st.key === "check" ? (st.r.conflicts.map((x) => x.text).join("; ") || "Weak match on identifiers") + (alt ? `. Best match is ${alt.property.code} ${alt.property.name}.` : "") : null });
         } else {
           const auto = ispAutoPick(ranked);
           if (auto) {
             c = await ispSavePair(supabaseClient, c, auto.property, "auto", ranked, userEmail);
-            setItem(i, { contract: c, ok: true, state: `Read · ${c.provider || "provider not found"} · paired with ${auto.property.code} ${auto.property.name} (High: ${auto.reasons.join(", ")})` });
+            setItem(i, { contract: c, ok: true, state: `Read · ${ispPartyOf(c) || "party not found"} · paired with ${auto.property.code} ${auto.property.name} (High: ${auto.reasons.join(", ")})` });
           } else {
-            setItem(i, { contract: c, picking: true, state: `Read · ${c.provider || "provider not found"} · confirm the property` });
+            setItem(i, { contract: c, picking: true, state: `Read · ${ispPartyOf(c) || "party not found"} · confirm the property` });
           }
         }
       } catch (x) {
         setItem(i, { state: x.message || String(x), err: true });
       }
       if (onChanged) onChanged();
-    }));
+    };
+    await Promise.all(Array.from({ length: Math.min(ISP_CONCURRENCY, files.length) }, worker));
     setBusy(false);
   };
+  const counts = items.reduce((m, x) => { m.total++; if (x.err) m.err++; else if (x.picking) m.pick++; else if (x.contract && !x.picking) m.done++; else m.wait++; return m; }, { total: 0, done: 0, pick: 0, err: 0, wait: 0 });
 
   return (
     <div>
@@ -7966,21 +8010,28 @@ function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCo
           </select>
         </div>
       )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
+        <span className="field-label" style={{ margin: 0 }}>Document type</span>
+        {Object.entries(ISP_KINDS).map(([k, v]) => (
+          <button key={k} disabled={busy} onClick={() => setKind(k)} style={{ padding: "6px 14px", borderRadius: 8, cursor: "pointer", fontWeight: kind === k ? 600 : 400, border: `1px solid ${kind === k ? "#2f6fd0" : "var(--border, #2c4170)"}`, background: kind === k ? "#2f6fd0" : "transparent", color: kind === k ? "#fff" : "inherit" }}>{v.label}</button>
+        ))}
+      </div>
       <input ref={fileRef} type="file" accept="application/pdf,.pdf" multiple style={{ display: "none" }} onChange={onFiles} />
-      <button className="btn-primary" disabled={busy} onClick={() => fileRef.current && fileRef.current.click()}>{busy ? "Working…" : "Upload ISP contract PDFs…"}</button>
-      <div className="dim" style={{ fontSize: 11.5, marginTop: 6 }}>Each PDF is read by Claude, then paired to its tracker property using the name, street address, city, state, ZIP, units and owner entity in the contract. A clear match pairs automatically; otherwise you confirm the recommended property or pick the right one. Conflicts on state, ZIP, street address or units are flagged.</div>
+      <button className="btn-primary" disabled={busy} onClick={() => fileRef.current && fileRef.current.click()}>{busy ? "Working…" : `Upload ${ISP_KINDS[kind].one} PDFs…`}</button>
+      {counts.total > 0 && <span style={{ marginLeft: 10, fontSize: 13, opacity: 0.85 }}>{counts.done} of {counts.total} done{counts.pick ? ` · ${counts.pick} need a property` : ""}{counts.err ? ` · ${counts.err} failed` : ""}{counts.wait ? ` · ${counts.wait} in progress` : ""}</span>}
+      <div className="dim" style={{ fontSize: 11.5, marginTop: 6 }}>Select as many PDFs as you like; they're read {ISP_CONCURRENCY} at a time. ISP agreements get the full due diligence read; consulting agreements get a light read (consultant, owner, dates, term, scope) to pair and flag them. Each PDF is read by Claude, then paired to its tracker property using the name, street address, city, state, ZIP, units and owner entity in the contract. A clear match pairs automatically; otherwise you confirm the recommended property or pick the right one. Conflicts on state, ZIP, street address or units are flagged.</div>
       {items.length > 0 && (
         <div style={{ marginTop: 10, fontSize: 13 }}>
           {items.map((x, i) => (
             <div key={i} style={{ padding: "6px 0", borderTop: i ? "1px solid var(--border, #2c4170)" : "none" }}>
               <div style={{ color: x.err ? "#ff8f86" : undefined }}>
-                <b>{x.name}</b> — {x.state}
+                <b>{x.name}</b>{x.kind === "consulting" && <span className="pill" style={{ marginLeft: 6, background: "#5a3a1a", color: "#ffd2a0" }}>Consulting</span>} — {x.state}
                 {x.contract && !x.picking && !fixedPropertyCode && <button className="link" style={{ marginLeft: 8 }} onClick={() => setItem(i, { picking: true })}>Change property</button>}
               </div>
               {x.warn && <div style={{ color: "#ff8f86", fontSize: 12.5, marginTop: 2 }}>⚠ {x.warn}{fixedPropertyCode ? "" : " "}{!fixedPropertyCode && !x.picking && <button className="link" onClick={() => setItem(i, { picking: true })}>Pick another property</button>}</div>}
               {x.contract && x.picking && (
                 <IspPairPicker contract={x.contract} properties={properties} supabaseClient={supabaseClient} userEmail={userEmail} compact
-                  onPaired={(c) => { const p = properties.find((q) => q.code === c.property_code); setItem(i, { contract: c, picking: false, ok: true, warn: null, state: `Read · ${c.provider || "provider not found"} · paired with ${p ? `${p.code} ${p.name}` : c.property_code}` }); if (onChanged) onChanged(); }} />
+                  onPaired={(c) => { const p = properties.find((q) => q.code === c.property_code); setItem(i, { contract: c, picking: false, ok: true, warn: null, state: `Read · ${ispPartyOf(c) || "party not found"} · paired with ${p ? `${p.code} ${p.name}` : c.property_code}` }); if (onChanged) onChanged(); }} />
               )}
             </div>
           ))}
@@ -8002,6 +8053,11 @@ const ISP_EDIT_FIELDS = [
   ["notes", "Notes", "text"],
 ];
 
+const ISP_CONSULT_EDIT_FIELDS = [
+  ["consultant", "Consultant", "text"], ["agreement_title", "Agreement", "text"], ["scope_summary", "Scope", "text"], ["owner_entity", "Owner entity", "text"],
+  ["executed_date", "Executed", "date"], ["effective_date", "Effective", "date"], ["term_months", "Term (months)", "number"], ["term_text", "Term as written", "text"],
+  ["expiration_date", "Expires", "date"], ["termination_terms", "Termination", "text"], ["notes", "Notes", "text"],
+];
 function IspContractDetail({ contract, properties, supabaseClient, onClose, onChanged, onOpenProperty, onOpenLegislation, legisItems, userEmail, onApplyToTracker }) {
   const [repair, setRepair] = useState(false);
   const [c, setC] = useState(contract);
@@ -8021,10 +8077,11 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
     if (error) { setMsg(`Couldn't save: ${error.message}`); return false; }
     setC(data); if (onChanged) onChanged(); return true;
   };
-  const startEdit = () => { const d = {}; ISP_EDIT_FIELDS.forEach(([k]) => { d[k] = c[k]; }); setDraft(d); setEdit(true); };
+  const editFields = c.doc_kind === "consulting" ? ISP_CONSULT_EDIT_FIELDS : ISP_EDIT_FIELDS;
+  const startEdit = () => { const d = {}; editFields.forEach(([k]) => { d[k] = c[k]; }); setDraft(d); setEdit(true); };
   const saveEdit = async () => {
     const patch = {};
-    ISP_EDIT_FIELDS.forEach(([k, , t]) => {
+    editFields.forEach(([k, , t]) => {
       let v = draft[k];
       if (t === "number") v = v === "" || v == null ? null : Number(v);
       else if (t === "bool") v = v === "" || v == null ? null : v === true || v === "true";
@@ -8042,7 +8099,7 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
     setBusy(false);
   };
   const remove = async () => {
-    if (!window.confirm(`Delete this ISP contract (${c.provider || c.file_name}) and its PDF? This can't be undone.`)) return;
+    if (!window.confirm(`Delete this ${consulting ? "consulting agreement" : "ISP contract"} (${ispPartyOf(c) || c.file_name}) and its PDF? This can't be undone.`)) return;
     setBusy(true);
     const { error } = await supabaseClient.from("isp_contracts").delete().eq("id", c.id);
     if (!error && c.file_path) await supabaseClient.storage.from(ISP_BUCKET).remove([c.file_path]);
@@ -8058,7 +8115,12 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
     return [...g.entries()];
   }, [c.line_items]);
 
-  const summary = [
+  const consulting = c.doc_kind === "consulting";
+  const summary = consulting ? [
+    ["Consultant", c.consultant], ["Agreement", c.agreement_title], ["Scope", c.scope_summary], ["Owner entity", c.owner_entity],
+    ["Executed", ispDate(c.executed_date)], ["Effective", ispDate(c.effective_date)], ["Term", c.term_text || ispTerm(c)], ["Expires", ispDate(c.expiration_date)],
+    ["Fees", (c.extraction || {}).fee_summary], ["Termination", c.termination_terms],
+  ] : [
     ["Provider", c.provider], ["Agreement", c.agreement_title || c.agreement_type], ["Executed", ispDate(c.executed_date)],
     ["Term", c.term_text || ispTerm(c)], ["Expires", ispDate(c.expiration_date)], ["Renewal", c.renewal_terms],
     ["Escalator", c.escalator || (c.escalator_pct != null ? `${c.escalator_pct}%` : null)], ["Rev share (retail)", c.rev_share],
@@ -8073,8 +8135,8 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
        <div className="proto-dash" style={{ background: "transparent" }}>
         <div className="modal-head">
           <div>
-            <div className="field-label" style={{ margin: 0 }}>ISP Contract — Due Diligence</div>
-            <h2 style={{ margin: "2px 0" }}>{c.provider || c.file_name}</h2>
+            <div className="field-label" style={{ margin: 0 }}>{consulting ? "Consulting Agreement" : "ISP Contract — Due Diligence"}</div>
+            <h2 style={{ margin: "2px 0" }}>{ispPartyOf(c) || c.file_name}{consulting && <span className="pill" style={{ marginLeft: 8, fontSize: 12, background: "#5a3a1a", color: "#ffd2a0", verticalAlign: "middle" }}>Consulting</span>}</h2>
             <div style={{ fontSize: 13, opacity: 0.85 }}>
               {property ? <button className="link" onClick={() => onOpenProperty && onOpenProperty(property)}>{property.code} {property.name}</button> : <span>Not linked to a property{c.property_name_in_contract ? ` (contract names "${c.property_name_in_contract}")` : ""}</span>}
               {c.property_address_in_contract && <span style={{ opacity: 0.75 }}> · {c.property_address_in_contract}</span>}
@@ -8108,8 +8170,8 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
             const ps = ispPairStatus(c, properties);
             const cmp = ispComparisonRows(c, property, legisItems);
             const fills = [];
-            if (c.executed_date && c.executed_date !== property.program.ispContractExecuted) fills.push(["ispContractExecuted", "ISP Contract Executed", property.program.ispContractExecuted, c.executed_date]);
-            if (c.expiration_date && c.expiration_date !== property.program.ispTermEnd) fills.push(["ispTermEnd", "ISP term end", property.program.ispTermEnd, c.expiration_date]);
+            if (!consulting && c.executed_date && c.executed_date !== property.program.ispContractExecuted) fills.push(["ispContractExecuted", "ISP Contract Executed", property.program.ispContractExecuted, c.executed_date]);
+            if (!consulting && c.expiration_date && c.expiration_date !== property.program.ispTermEnd) fills.push(["ispTermEnd", "ISP term end", property.program.ispTermEnd, c.expiration_date]);
             return (
               <div style={{ marginBottom: 14 }}>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", margin: "4px 0 8px", fontSize: 13 }}>
@@ -8126,7 +8188,7 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
                   <table>
                     <thead><tr><th>Identifier</th><th>Contract</th><th>Tracker</th><th>Result</th></tr></thead>
                     <tbody>
-                      {cmp.rows.map((r) => (
+                      {cmp.rows.filter((r) => !consulting || !/ISP Contract Executed|ISP term end/.test(r.label)).map((r) => (
                         <tr key={r.label}>
                           <td style={{ whiteSpace: "nowrap" }}>{r.label}</td>
                           <td style={{ fontSize: 12.5 }}>{r.cv ? (/Executed|Expiration/.test(r.label) ? ispDate(r.cv) : r.cv) : <span style={{ color: "var(--mut)" }}>—</span>}</td>
@@ -8157,7 +8219,7 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
             );
           })()}
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
+        {!consulting && <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
           {[["Anti-bulk", c.anti_bulk, c.anti_bulk_detail], ["Exclusive", c.exclusive, c.exclusivity_detail]].map(([l, v, d]) => (
             <div key={l} style={{ border: "1px solid var(--border, #2c4170)", borderRadius: 10, padding: "10px 14px", minWidth: 220, flex: 1 }}>
               <div className="field-label" style={{ margin: 0 }}>{l}</div>
@@ -8165,12 +8227,12 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
               {d && <div style={{ fontSize: 12.5, opacity: 0.85 }}>{d}</div>}
             </div>
           ))}
-        </div>
+        </div>}
 
         {edit ? (
           <div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "8px 14px" }}>
-              {ISP_EDIT_FIELDS.map(([k, l, t]) => (
+              {(consulting ? ISP_CONSULT_EDIT_FIELDS : ISP_EDIT_FIELDS).map(([k, l, t]) => (
                 <label key={k} style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 12.5 }}>
                   <span className="field-label" style={{ margin: 0 }}>{l}</span>
                   {t === "bool" ? (
@@ -8199,21 +8261,21 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
           </div>
         )}
 
-        {(c.red_flags || []).length > 0 && (
+        {!consulting && (c.red_flags || []).length > 0 && (
           <div style={{ marginBottom: 14 }}>
             <div className="section-header">Red flags for a bulk program</div>
             <ul style={{ margin: "6px 0", paddingLeft: 20, fontSize: 13 }}>{c.red_flags.map((r, i) => <li key={i} style={{ color: "#ffc7c1" }}>{r}</li>)}</ul>
           </div>
         )}
-        {(c.key_points || []).length > 0 && (
+        {!consulting && (c.key_points || []).length > 0 && (
           <div style={{ marginBottom: 14 }}>
             <div className="section-header">Key points</div>
             <ul style={{ margin: "6px 0", paddingLeft: 20, fontSize: 13 }}>{c.key_points.map((r, i) => <li key={i}>{r}</li>)}</ul>
           </div>
         )}
 
-        <div className="section-header">Line items</div>
-        {groups.length === 0 ? <div className="dim" style={{ fontSize: 13, margin: "6px 0" }}>{c.status === "done" ? "No line items were found." : "Line items appear once the contract has been read."}</div> : (
+        {!consulting && <div className="section-header">Line items</div>}
+        {consulting ? null : groups.length === 0 ? <div className="dim" style={{ fontSize: 13, margin: "6px 0" }}>{c.status === "done" ? "No line items were found." : "Line items appear once the contract has been read."}</div> : (
           <div className="tw" style={{ marginTop: 6 }}>
             <table>
               <thead><tr><th>Category</th><th>Term</th><th>Value</th><th>Section</th></tr></thead>
@@ -8245,7 +8307,10 @@ function IspContractsView({ contracts, properties, supabaseClient, onChanged, on
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(null);
   const byCode = useMemo(() => { const m = {}; properties.forEach((p) => { m[p.code] = p; }); return m; }, [properties]);
-  const list = contracts || [];
+  const [kind, setKind] = useState("isp");
+  const all = contracts || [];
+  const consultingList = all.filter((c) => c.doc_kind === "consulting");
+  const list = all.filter((c) => c.doc_kind !== "consulting");
   const expiring = list.filter((c) => { const m = ispMonthsToExpiry(c); return m != null && m >= 0 && m <= 12; });
   const pairKey = (c) => ispPairStatus(c, properties).key;
   const mismatched = list.filter((c) => ["unpaired", "mismatch", "check"].includes(pairKey(c)));
@@ -8253,28 +8318,36 @@ function IspContractsView({ contracts, properties, supabaseClient, onChanged, on
   const q = search.trim().toLowerCase();
   const shown = scoped.filter((c) => { if (!q) return true; const p = byCode[c.property_code]; return `${c.provider || ""} ${c.agreement_title || ""} ${c.file_name || ""} ${c.property_name_in_contract || ""} ${p ? `${p.code} ${p.name} ${(p.program.attributes || {}).Client || ""}` : ""}`.toLowerCase().includes(q); });
   const propsCovered = new Set(list.map((c) => c.property_code).filter(Boolean)).size;
-  const openC = open && list.find((c) => c.id === open.id) || open;
+  const openC = open && all.find((c) => c.id === open.id) || open;
+  const consultShown = consultingList.filter((c) => { if (!q) return true; const p = byCode[c.property_code]; return `${c.consultant || ""} ${c.agreement_title || ""} ${c.scope_summary || ""} ${c.file_name || ""} ${c.property_name_in_contract || ""} ${p ? `${p.code} ${p.name} ${(p.program.attributes || {}).Client || ""}` : ""}`.toLowerCase().includes(q); });
 
   return (
     <div className="proto-dash">
       <div className="wrap" style={{ maxWidth: "none" }}>
         <h1>ISP Contracts</h1>
-        <p className="sub">Existing ISP agreements reviewed for due diligence, read from the uploaded PDFs. Select a contract to see every line item. Upload from Import / Export → Import → ISP Contracts, or from a property record.</p>
+        <p className="sub">Existing ISP agreements reviewed for due diligence, read from the uploaded PDFs, plus consulting agreements flagged on their properties. Select a contract to see every line item. Upload from Import / Export → Import → ISP Contracts, or from a property record.</p>
         <div className="kpis">
           <div className="kpi"><div className="v">{list.length}</div><div className="k">ISP contracts</div><div className="n">{propsCovered} properties</div></div>
           <div className="kpi"><div className="v c-a">{list.filter((c) => c.anti_bulk).length}</div><div className="k">Anti-bulk clause</div></div>
           <div className="kpi"><div className="v c-a">{list.filter((c) => c.exclusive).length}</div><div className="k">Exclusive</div></div>
           <div className="kpi"><div className="v">{expiring.length}</div><div className="k">Expiring within 12 months</div></div>
+          <div className="kpi" onClick={() => setKind("consulting")} style={{ cursor: "pointer" }}><div className="v" style={{ color: "#ffd2a0" }}>{consultingList.length}</div><div className="k">Consulting agreements</div><div className="n">{new Set(consultingList.map((c) => c.property_code).filter(Boolean)).size} properties flagged</div></div>
         </div>
-        <div className="tabs" role="tablist">
+        <div className="tabs" role="tablist" style={{ marginBottom: 0 }}>
+          <button className={kind === "isp" ? "on" : ""} onClick={() => setKind("isp")}>ISP agreements ({list.length})</button>
+          <button className={kind === "consulting" ? "on" : ""} onClick={() => setKind("consulting")}>Consulting agreements ({consultingList.length})</button>
+        </div>
+        {kind === "isp" && <div className="tabs" role="tablist">
           {[["all", `All (${list.length})`], ["match", `Pairing issues (${mismatched.length})`], ["antibulk", "Anti-bulk"], ["exclusive", "Exclusive"], ["expiring", "Expiring ≤ 12 mo"], ["review", "Needs review"]].map(([k, l]) => (
             <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>
           ))}
-        </div>
+        </div>}
         <div className="toolbar">
-          <input type="text" placeholder="Search by property, client or provider" value={search} onChange={(e) => setSearch(e.target.value)} style={{ minWidth: 280 }} aria-label="Search ISP contracts" />
+          <input type="text" placeholder={kind === "consulting" ? "Search by property, client or consultant" : "Search by property, client or provider"} value={search} onChange={(e) => setSearch(e.target.value)} style={{ minWidth: 280 }} aria-label="Search ISP contracts" />
         </div>
-        <IspContractsTable rows={shown} byCode={byCode} onOpen={setOpen} showProperty properties={properties} />
+        {kind === "consulting"
+          ? <IspConsultingTable rows={consultShown} byCode={byCode} onOpen={setOpen} showProperty properties={properties} />
+          : <IspContractsTable rows={shown} byCode={byCode} onOpen={setOpen} showProperty properties={properties} />}
         <p className="foot">Terms are read from each PDF by Claude; check them against the PDF and tick "Verified" in the drill-in. Tracker match compares the contract's name, street address, city, state, ZIP, units and owner entity with the paired property: Paired (identifiers agree), Check (minor differences), Mismatch (state, ZIP, street address or units disagree) or Unpaired.</p>
       </div>
       {openC && <IspContractDetail contract={openC} properties={properties} supabaseClient={supabaseClient} onClose={() => setOpen(null)} onChanged={onChanged} onOpenProperty={onOpenProperty} onOpenLegislation={(st) => { setOpen(null); onOpenLegislation(st); }} legisItems={legisItems} userEmail={userEmail} onApplyToTracker={onApplyToTracker} />}
@@ -8285,10 +8358,12 @@ function IspContractsView({ contracts, properties, supabaseClient, onChanged, on
 // The property record's ISP Contracts — Due Diligence repository.
 function IspPropertyContractsModal({ property, contracts, properties, supabaseClient, userEmail, onClose, onChanged, onOpenLegislation, legisItems, onApplyToTracker }) {
   const [open, setOpen] = useState(null);
-  const rows = (contracts || []).filter((c) => c.property_code === property.code);
+  const mine = (contracts || []).filter((c) => c.property_code === property.code);
+  const rows = mine.filter((c) => c.doc_kind !== "consulting");
+  const consultRows = mine.filter((c) => c.doc_kind === "consulting");
   const byCode = { [property.code]: property };
   const st = ispStateOf({}, property);
-  const openC = open && rows.find((c) => c.id === open.id) || open;
+  const openC = open && mine.find((c) => c.id === open.id) || open;
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 1180, width: "96vw", maxHeight: "92vh", overflowY: "auto" }}>
@@ -8303,7 +8378,12 @@ function IspPropertyContractsModal({ property, contracts, properties, supabaseCl
           <div style={{ flex: 1, minWidth: 300 }}><IspUploadPanel properties={properties} supabaseClient={supabaseClient} userEmail={userEmail} fixedPropertyCode={property.code} onChanged={onChanged} /></div>
           {st && onOpenLegislation && <button className="btn-ghost" onClick={() => onOpenLegislation(st)}>View {US_STATE_NAMES[st]} legislation →</button>}
         </div>
-        <div className="proto-dash" style={{ background: "transparent" }}><IspContractsTable rows={rows} byCode={byCode} onOpen={setOpen} properties={properties} /></div>
+        <div className="proto-dash" style={{ background: "transparent" }}>
+          <div className="field-label" style={{ margin: "4px 0 6px" }}>ISP agreements ({rows.length})</div>
+          <IspContractsTable rows={rows} byCode={byCode} onOpen={setOpen} properties={properties} />
+          <div className="field-label" style={{ margin: "16px 0 6px", color: consultRows.length ? "#ffd2a0" : undefined }}>Consulting agreements ({consultRows.length})</div>
+          <IspConsultingTable rows={consultRows} byCode={byCode} onOpen={setOpen} properties={properties} />
+        </div>
       </div>
       {openC && <IspContractDetail contract={openC} properties={properties} supabaseClient={supabaseClient} onClose={() => setOpen(null)} onChanged={onChanged} onOpenLegislation={(st2) => { setOpen(null); onOpenLegislation(st2); }} legisItems={legisItems} userEmail={userEmail} onApplyToTracker={onApplyToTracker} />}
     </div>
@@ -10675,7 +10755,7 @@ function App() {
       )}
 
       {programProperty && !phaseSel && (
-        <ProgramModal property={programProperty} onClose={closeProgram} onOpenPhase={openPhaseFromProgram} onSetManualStatus={setManualStatus} onSetDecision={setDecision} onSetPriority={setPriority} onUpdateAttribute={updateAttribute} onUpdateNotes={updateNotes} onUpdateNotesLog={updateNotesLog} onSetDDDate={setDDDate} onToggleDueDiligence={toggleDueDiligenceSelected} onToggleServiceOption={toggleServiceOption} onSetServiceContractDate={setServiceContractDate} onSetISPDate={setISPDate} onSetExpectedTCO={setExpectedTCO} onSetDeploymentLiveDate={setDeploymentLiveDate} onSetBillingMilestone={setBillingMilestone} ispCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code).length : 0} onOpenIspContracts={() => programProperty && setIspFor(programProperty.code)} regionsList={regionsList} onAddRegion={addRegion} currentUserEmail={session && session.user ? session.user.email : null} />
+        <ProgramModal property={programProperty} onClose={closeProgram} onOpenPhase={openPhaseFromProgram} onSetManualStatus={setManualStatus} onSetDecision={setDecision} onSetPriority={setPriority} onUpdateAttribute={updateAttribute} onUpdateNotes={updateNotes} onUpdateNotesLog={updateNotesLog} onSetDDDate={setDDDate} onToggleDueDiligence={toggleDueDiligenceSelected} onToggleServiceOption={toggleServiceOption} onSetServiceContractDate={setServiceContractDate} onSetISPDate={setISPDate} onSetExpectedTCO={setExpectedTCO} onSetDeploymentLiveDate={setDeploymentLiveDate} onSetBillingMilestone={setBillingMilestone} ispCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind !== "consulting").length : 0} consultCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind === "consulting").length : 0} onOpenIspContracts={() => programProperty && setIspFor(programProperty.code)} regionsList={regionsList} onAddRegion={addRegion} currentUserEmail={session && session.user ? session.user.email : null} />
       )}
 
       {phaseProperty && phaseSel && (
