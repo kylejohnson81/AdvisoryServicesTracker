@@ -7931,6 +7931,50 @@ function IspConsultingTable({ rows, byCode, onOpen, showProperty, properties }) 
   );
 }
 
+// ---- Keeping contract reads small ----
+// Before a PDF goes to Claude it's prepared here in the browser: pages with a
+// text layer are sent as text (far cheaper than page images), scanned pages as
+// reduced JPEGs that stay readable, and a consulting agreement keeps only the
+// pages its light read needs (first 3 and last 2: parties, property, dates,
+// scope, signatures). Each file's SHA-256 fingerprint stops a duplicate from
+// being uploaded and read twice.
+const ISP_TEXT_MIN = 300;       // characters for a page to count as having a text layer
+const ISP_IMG_MAX_PX = 1100;    // longest side of a scanned page image
+async function ispFileHash(buf) {
+  const d = await crypto.subtle.digest("SHA-256", buf);
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function ispPreparePages(buf, kind) {
+  if (!window.pdfjsLib) throw new Error("The PDF reader didn't load. Refresh and try again.");
+  const pdf = await window.pdfjsLib.getDocument({ data: new Uint8Array(buf.slice(0)) }).promise;
+  const total = pdf.numPages;
+  const want = kind === "consulting"
+    ? [...new Set([1, 2, 3, total - 1, total].filter((n) => n >= 1 && n <= total))].sort((a, b) => a - b)
+    : Array.from({ length: total }, (_, k) => k + 1);
+  const pages = []; let textPages = 0, imagePages = 0;
+  for (const n of want) {
+    const page = await pdf.getPage(n);
+    const tc = await page.getTextContent();
+    const text = tc.items.map((it) => (it.str || "") + (it.hasEOL ? "\n" : " ")).join("").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n").trim();
+    if (text.length >= ISP_TEXT_MIN) { pages.push({ n, text }); textPages++; continue; }
+    const vp1 = page.getViewport({ scale: 1 });
+    const vp = page.getViewport({ scale: ISP_IMG_MAX_PX / Math.max(vp1.width, vp1.height) });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    pages.push({ n, jpeg: canvas.toDataURL("image/jpeg", 0.72).split(",")[1] });
+    imagePages++;
+    canvas.width = canvas.height = 0;
+  }
+  const note = kind === "consulting" && want.length < total ? `Only pages ${want.join(", ")} of ${total} are included (cover pages and signature pages).` : null;
+  const mode = kind === "consulting" && want.length < total
+    ? `${want.length} of ${total} pages`
+    : `${total} pages: ${textPages} as text${imagePages ? `, ${imagePages} scanned` : ""}`;
+  return { pages, note, total, sent: want.length, mode };
+}
+
 // Upload one or more ISP contract PDFs; each is stored, read by Claude, then
 // paired to its tracker property: automatically on a clear high-likelihood
 // match, otherwise from the recommended property (or any other) you confirm.
@@ -7955,20 +7999,33 @@ function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCo
     setItems((xs) => [...xs, ...files.map((f) => ({ name: f.name, kind: docKind, state: "Queued" }))]);
     setBusy(true);
     // Work through the batch a few at a time so a large upload doesn't hit rate limits.
+    const batchHashes = new Set();
     let next = 0;
     const worker = async () => { while (next < files.length) { const k = next++; await one(files[k], start + k); } };
     const one = async (f, i) => {
-      setItem(i, { state: "Uploading…" });
+      setItem(i, { state: "Checking…" });
       try {
         if (!/\.pdf$/i.test(f.name) && f.type !== "application/pdf") throw new Error("Only PDF files can be read.");
+        const buf = await f.arrayBuffer();
+        const hash = await ispFileHash(buf);
+        if (batchHashes.has(hash)) { setItem(i, { state: "Skipped: same file as another one in this upload", skipped: true }); return; }
+        batchHashes.add(hash);
+        const dup = await supabaseClient.from("isp_contracts").select("id, file_name, property_code").eq("file_sha256", hash).limit(1);
+        if (dup.data && dup.data.length) { const d = dup.data[0]; setItem(i, { state: `Skipped: already in the repository as "${d.file_name}"${d.property_code ? ` (${d.property_code})` : ""}`, skipped: true }); return; }
+        setItem(i, { state: "Preparing pages…" });
+        const prep = await ispPreparePages(buf, docKind);
         const folder = code === "auto" ? "unpaired" : code;
         const path = `isp/${folder}/${Date.now()}-${f.name.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
+        setItem(i, { state: `Uploading… (${prep.mode})` });
         const up = await supabaseClient.storage.from(ISP_BUCKET).upload(path, f, { contentType: "application/pdf", upsert: false });
         if (up.error) throw new Error(`Upload failed: ${up.error.message}`);
-        const ins = await supabaseClient.from("isp_contracts").insert([{ doc_kind: docKind, property_code: null, file_path: path, file_name: f.name, file_size: f.size, status: "pending", uploaded_by: userEmail || null }]).select().single();
+        const prepPath = `${path}.prep.json`;
+        const up2 = await supabaseClient.storage.from(ISP_BUCKET).upload(prepPath, new Blob([JSON.stringify({ pages: prep.pages, note: prep.note })], { type: "application/json" }), { contentType: "application/json", upsert: false });
+        const ins = await supabaseClient.from("isp_contracts").insert([{ doc_kind: docKind, property_code: null, file_path: path, file_name: f.name, file_size: f.size, status: "pending", uploaded_by: userEmail || null,
+          file_sha256: hash, prep_path: up2.error ? null : prepPath, pages_total: prep.total, pages_sent: prep.sent, read_mode: up2.error ? "Whole PDF" : prep.mode }]).select().single();
         if (ins.error) throw new Error(`Saving failed: ${ins.error.message}`);
         if (onChanged) onChanged();
-        setItem(i, { state: "Reading with Claude… (about a minute)" });
+        setItem(i, { state: `Reading with Claude… (${prep.mode})` });
         let c = await ispExtract(supabaseClient, ins.data.id);
         if (!c) throw new Error("Nothing came back from the contract read.");
         const ranked = ispRankProperties(c, properties);
@@ -7997,7 +8054,7 @@ function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCo
     await Promise.all(Array.from({ length: Math.min(ISP_CONCURRENCY, files.length) }, worker));
     setBusy(false);
   };
-  const counts = items.reduce((m, x) => { m.total++; if (x.err) m.err++; else if (x.picking) m.pick++; else if (x.contract && !x.picking) m.done++; else m.wait++; return m; }, { total: 0, done: 0, pick: 0, err: 0, wait: 0 });
+  const counts = items.reduce((m, x) => { m.total++; if (x.skipped) m.skip++; else if (x.err) m.err++; else if (x.picking) m.pick++; else if (x.contract && !x.picking) m.done++; else m.wait++; return m; }, { total: 0, done: 0, pick: 0, err: 0, wait: 0, skip: 0 });
 
   return (
     <div>
@@ -8018,13 +8075,13 @@ function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCo
       </div>
       <input ref={fileRef} type="file" accept="application/pdf,.pdf" multiple style={{ display: "none" }} onChange={onFiles} />
       <button className="btn-primary" disabled={busy} onClick={() => fileRef.current && fileRef.current.click()}>{busy ? "Working…" : `Upload ${ISP_KINDS[kind].one} PDFs…`}</button>
-      {counts.total > 0 && <span style={{ marginLeft: 10, fontSize: 13, opacity: 0.85 }}>{counts.done} of {counts.total} done{counts.pick ? ` · ${counts.pick} need a property` : ""}{counts.err ? ` · ${counts.err} failed` : ""}{counts.wait ? ` · ${counts.wait} in progress` : ""}</span>}
-      <div className="dim" style={{ fontSize: 11.5, marginTop: 6 }}>Select as many PDFs as you like; they're read {ISP_CONCURRENCY} at a time. ISP agreements get the full due diligence read; consulting agreements get a light read (consultant, owner, dates, term, scope) to pair and flag them. Each PDF is read by Claude, then paired to its tracker property using the name, street address, city, state, ZIP, units and owner entity in the contract. A clear match pairs automatically; otherwise you confirm the recommended property or pick the right one. Conflicts on state, ZIP, street address or units are flagged.</div>
+      {counts.total > 0 && <span style={{ marginLeft: 10, fontSize: 13, opacity: 0.85 }}>{counts.done} of {counts.total} done{counts.pick ? ` · ${counts.pick} need a property` : ""}{counts.skip ? ` · ${counts.skip} duplicate${counts.skip === 1 ? "" : "s"} skipped` : ""}{counts.err ? ` · ${counts.err} failed` : ""}{counts.wait ? ` · ${counts.wait} in progress` : ""}</span>}
+      <div className="dim" style={{ fontSize: 11.5, marginTop: 6 }}>Select as many PDFs as you like; they're read {ISP_CONCURRENCY} at a time, and files already in the repository are skipped. To keep reads small, pages with a text layer go as text, scanned pages as reduced images, and consulting agreements send only their first 3 and last 2 pages. ISP agreements get the full due diligence read; consulting agreements get a light read (consultant, owner, dates, term, scope) to pair and flag them. Each PDF is read by Claude, then paired to its tracker property using the name, street address, city, state, ZIP, units and owner entity in the contract. A clear match pairs automatically; otherwise you confirm the recommended property or pick the right one. Conflicts on state, ZIP, street address or units are flagged.</div>
       {items.length > 0 && (
         <div style={{ marginTop: 10, fontSize: 13 }}>
           {items.map((x, i) => (
             <div key={i} style={{ padding: "6px 0", borderTop: i ? "1px solid var(--border, #2c4170)" : "none" }}>
-              <div style={{ color: x.err ? "#ff8f86" : undefined }}>
+              <div style={{ color: x.err ? "#ff8f86" : x.skipped ? "var(--mut)" : undefined }}>
                 <b>{x.name}</b>{x.kind === "consulting" && <span className="pill" style={{ marginLeft: 6, background: "#5a3a1a", color: "#ffd2a0" }}>Consulting</span>} — {x.state}
                 {x.contract && !x.picking && !fixedPropertyCode && <button className="link" style={{ marginLeft: 8 }} onClick={() => setItem(i, { picking: true })}>Change property</button>}
               </div>
@@ -8102,7 +8159,7 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
     if (!window.confirm(`Delete this ${consulting ? "consulting agreement" : "ISP contract"} (${ispPartyOf(c) || c.file_name}) and its PDF? This can't be undone.`)) return;
     setBusy(true);
     const { error } = await supabaseClient.from("isp_contracts").delete().eq("id", c.id);
-    if (!error && c.file_path) await supabaseClient.storage.from(ISP_BUCKET).remove([c.file_path]);
+    if (!error && c.file_path) await supabaseClient.storage.from(ISP_BUCKET).remove([c.file_path, c.prep_path].filter(Boolean));
     setBusy(false);
     if (error) { setMsg(`Couldn't delete: ${error.message}`); return; }
     if (onChanged) onChanged(); onClose();
@@ -8293,7 +8350,7 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
           </div>
         )}
         <div className="dim" style={{ fontSize: 11, marginTop: 10 }}>
-          {c.file_name}{c.uploaded_by ? ` · uploaded by ${c.uploaded_by}` : ""}{c.extracted_at ? ` · read ${fmtDate(String(c.extracted_at).slice(0, 10))}${c.model ? ` (${c.model})` : ""}` : ""}
+          {c.file_name}{c.uploaded_by ? ` · uploaded by ${c.uploaded_by}` : ""}{c.extracted_at ? ` · read ${fmtDate(String(c.extracted_at).slice(0, 10))}${c.model ? ` (${c.model})` : ""}` : ""}{c.read_mode ? ` · sent ${c.read_mode}` : ""}
         </div>
        </div>
       </div>
