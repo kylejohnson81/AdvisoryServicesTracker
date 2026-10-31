@@ -7963,7 +7963,9 @@ async function ispPreparePages(buf, kind) {
     canvas.width = Math.round(vp.width); canvas.height = Math.round(vp.height);
     const ctx = canvas.getContext("2d");
     ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    // "print" intent renders straight through instead of waiting on animation
+    // frames, which never fire while the window is in the background.
+    await page.render({ canvasContext: ctx, viewport: vp, intent: "print" }).promise;
     pages.push({ n, jpeg: canvas.toDataURL("image/jpeg", 0.72).split(",")[1] });
     imagePages++;
     canvas.width = canvas.height = 0;
