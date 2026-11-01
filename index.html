@@ -7314,7 +7314,7 @@ function ImportExportModal({ section: initialSection = "import", onClose, proper
         <div className="modal-head">
           <div>
             {mode && <button className="btn-ghost" onClick={() => reset(null)} disabled={busy} style={{ marginBottom: 6 }}>← Back</button>}
-            <h2>{mode === "contracts" ? "Refresh Contract Data" : mode === "master" ? "Refresh Master Data" : mode === "isp" ? "ISP Contracts — Due Diligence" : "Import / Export"}</h2>
+            <h2>{mode === "contracts" ? "Refresh Contract Data" : mode === "master" ? "Refresh Master Data" : mode === "isp" ? "ISP Contracts — Due Diligence" : mode === "rfp" ? "RFPs" : "Import / Export"}</h2>
           </div>
           <button className="icon-btn" onClick={onClose} disabled={busy}><X size={18} /></button>
         </div>
@@ -7348,6 +7348,13 @@ function ImportExportModal({ section: initialSection = "import", onClose, proper
               <button className="btn-primary" onClick={() => setRevenueOpen(true)}>Choose</button>)}
             {card("ISP Contracts — Due Diligence", "Upload existing ISP agreement PDFs, or consulting agreements to flag on their properties. Select many at once. Each one is stored with its property and read by Claude for provider, executed date, term, expiration, escalator, revenue share, door fees, contract paper, anti-bulk, exclusivity and every line item. Results show on the ISP Contracts page and the property record.",
               <button className="btn-primary" onClick={() => reset("isp")}>Choose</button>)}
+            {card("RFPs", "Upload the RFPs you send to providers, and consolidated RFPs, for one or many properties at once. Each file is paired to its property from the file name, and you can change the pairing before uploading. They open from View RFP on the property record.",
+              <button className="btn-primary" onClick={() => reset("rfp")}>Choose</button>)}
+          </div>
+        )}
+        {mode === "rfp" && (
+          <div style={{ marginTop: 8 }}>
+            <RfpBulkUpload properties={properties} supabaseClient={supabaseClient} userEmail={userEmail} />
           </div>
         )}
         {mode === "isp" && (
@@ -7357,7 +7364,7 @@ function ImportExportModal({ section: initialSection = "import", onClose, proper
         )}
         {revenueOpen && <RevenueImportModal previous={billingImport} properties={properties} onClose={() => setRevenueOpen(false)} onSave={onSaveBillingImport} />}
 
-        {mode && mode !== "isp" && (
+        {mode && mode !== "isp" && mode !== "rfp" && (
           <div style={{ marginTop: 8 }}>
             <input ref={fileRef} type="file" accept=".xlsx,.xlsm,.xls,.csv" style={{ display: "none" }} onChange={onFile} />
             {!preview && !done && (
@@ -8930,6 +8937,82 @@ function RfpDetailsModal({ property, proposals, documents, supabaseClient, userE
        </div>
       </div>
       {openP && <RfpProposalDetail proposal={openP} property={property} supabaseClient={supabaseClient} onClose={() => setOpen(null)} onChanged={onChanged} />}
+    </div>
+  );
+}
+
+
+// Bulk RFP upload (Import / Export → Import): pick files, pair each to a property, upload.
+function rfpGuessProperty(fileName, properties) {
+  const toks = dupNameTokens(String(fileName || "").replace(/\.[a-z0-9]+$/i, "").replace(/[_\-]+/g, " "));
+  const hits = properties.filter((p) => [p.name, ...previousNamesOf(p)].some((n) => {
+    const t = dupNameTokens(n); return t.length && t.join("").length >= 4 && t.every((w) => toks.includes(w));
+  }));
+  const codeHit = String(fileName || "").match(/\bP-?(\d{2,4})\b/i);
+  if (codeHit) { const c = `P-${codeHit[1].padStart(3, "0")}`; if (properties.some((p) => p.code === c)) return c; }
+  return hits.length === 1 ? hits[0].code : "";
+}
+function RfpBulkUpload({ properties, supabaseClient, userEmail }) {
+  const [rows, setRows] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const fileRef = React.useRef(null);
+  const sorted = useMemo(() => properties.slice().sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true })), [properties]);
+  const setRow = (i, patch) => setRows((xs) => xs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const onFiles = (e) => {
+    const files = [...(e.target.files || [])]; e.target.value = "";
+    setRows((xs) => [...xs, ...files.map((f) => {
+      const code = rfpGuessProperty(f.name, properties);
+      return { file: f, code, guessed: !!code, kind: /consolidat|compar|summary|matrix/i.test(f.name) ? "consolidated" : "rfp", sent: "", state: null, ok: false };
+    })]);
+  };
+  const upload = async () => {
+    setBusy(true);
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (r.ok || !r.code) continue;
+      setRow(i, { state: "Uploading…", err: false });
+      try {
+        const path = `rfp/${r.code}/documents/${Date.now()}-${rfpSafeName(r.file.name)}`;
+        const up = await supabaseClient.storage.from(ISP_BUCKET).upload(path, r.file, { contentType: r.file.type || "application/octet-stream", upsert: false });
+        if (up.error) throw new Error(`Upload failed: ${up.error.message}`);
+        const ins = await supabaseClient.from("rfp_documents").insert([{ property_code: r.code, kind: r.kind, title: r.file.name, sent_date: r.sent || null,
+          file_path: path, file_name: r.file.name, file_size: r.file.size, created_by: userEmail || null }]);
+        if (ins.error) throw new Error(ins.error.message);
+        setRow(i, { state: `Added to ${r.code}`, ok: true });
+      } catch (x) { setRow(i, { state: x.message || String(x), err: true }); }
+    }
+    setBusy(false);
+  };
+  const pending = rows.filter((r) => !r.ok);
+  const unpaired = pending.filter((r) => !r.code).length;
+  return (
+    <div>
+      <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
+        Select one or more RFP files (PDF, Word, Excel). Each is paired to a property from its file name (P-code, property name or a former name); check the pairing, choose RFP or Consolidated RFP, and upload. They show under View RFP and in RFP Details on each property. Provider proposals are added in RFP Details.
+      </div>
+      <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={onFiles} />
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <button className="btn-ghost" onClick={() => fileRef.current && fileRef.current.click()} disabled={busy}>Choose files</button>
+        {rows.length > 0 && <button className="btn-primary" onClick={upload} disabled={busy || !pending.length || unpaired === pending.length}>Upload {pending.length - unpaired} file{pending.length - unpaired === 1 ? "" : "s"}</button>}
+        {unpaired > 0 && <span style={{ fontSize: 12.5, color: "#ffd98a", alignSelf: "center" }}>{unpaired} need a property</span>}
+      </div>
+      {rows.length > 0 && (
+        <div className="contract-dates-list">
+          {rows.map((r, i) => (
+            <div className="contract-date-row" key={i} style={{ flexWrap: "wrap", gap: 8 }}>
+              <span style={{ fontSize: 13, flex: "1 1 220px", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }} title={r.file.name}>{r.file.name}</span>
+              <select value={r.kind} disabled={r.ok || busy} onChange={(e) => setRow(i, { kind: e.target.value })}>{Object.entries(RFP_DOC_KINDS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+              <select value={r.code} disabled={r.ok || busy} onChange={(e) => setRow(i, { code: e.target.value, guessed: false })} style={{ maxWidth: 260, borderColor: r.code ? undefined : "#ffd98a" }}>
+                <option value="">Choose property…</option>
+                {sorted.map((p) => <option key={p.code} value={p.code}>{p.code} {p.name}</option>)}
+              </select>
+              <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}>Sent <input type="date" value={r.sent} disabled={r.ok || busy} onChange={(e) => setRow(i, { sent: e.target.value })} /></label>
+              <span style={{ fontSize: 12.5, minWidth: 120, color: r.err ? "#ff8f86" : r.ok ? "#b8efc7" : undefined }}>{r.state || (r.code ? (r.guessed ? "Matched from file name" : "") : "")}</span>
+              {!r.ok && !busy && <button className="link" onClick={() => setRows((xs) => xs.filter((_, j) => j !== i))}>Remove</button>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
