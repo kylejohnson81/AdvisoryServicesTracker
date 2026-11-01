@@ -4510,7 +4510,7 @@ function NoteBody({ text }) {
   );
 }
 
-function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSetDecision, onSetPriority, onUpdateAttribute, onUpdateNotes, onUpdateNotesLog, onSetDDDate, onToggleDueDiligence, onToggleServiceOption, onSetServiceContractDate, onSetISPDate, onSetExpectedTCO, onSetDeploymentLiveDate, onSetBillingMilestone, ispCount, consultCount, onOpenIspContracts, regionsList, onAddRegion, currentUserEmail }) {
+function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSetDecision, onSetPriority, onUpdateAttribute, onUpdateNotes, onUpdateNotesLog, onSetDDDate, onToggleDueDiligence, onToggleServiceOption, onSetServiceContractDate, onSetISPDate, onSetExpectedTCO, onSetDeploymentLiveDate, onSetBillingMilestone, ispCount, consultCount, onOpenIspContracts, rfpProposals, rfpDocs, onOpenRfp, onViewRfp, regionsList, onAddRegion, currentUserEmail }) {
   const [notesOpen, setNotesOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState(null);
@@ -5064,8 +5064,27 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
           </div>
         </div>
 
-        <div className="section-header">New Provider Deals</div>
-        <div className="dim" style={{ fontSize: 12, marginBottom: 18 }}>Provider proposals, the consolidated RFP and agreements executed through Advisory Services will be tracked here.</div>
+        <div className="section-header">RFP Details</div>
+        {(() => {
+          const props_ = (rfpProposals || []);
+          const counts = props_.reduce((m, x) => { m[x.status] = (m[x.status] || 0) + 1; return m; }, {});
+          const latest = props_.slice().sort((a, b) => String(b.received_date || "").localeCompare(String(a.received_date || "")))[0];
+          const rfpDoc = (rfpDocs || []).filter((d) => d.kind === "rfp").sort((a, b) => b.id - a.id)[0] || (rfpDocs || [])[0];
+          return (
+            <div className="contract-dates-list" style={{ marginBottom: 18 }}>
+              <div className="contract-date-row" style={{ cursor: "pointer" }} onClick={() => onOpenRfp && onOpenRfp()}>
+                <span className="field-label" style={{ margin: 0 }}>
+                  {props_.length ? `${props_.length} provider${props_.length === 1 ? "" : "s"}: ${Object.entries(counts).map(([k, n]) => `${n} ${((RFP_STATUS[k] || {}).label || k).toLowerCase()}`).join(", ")}` : "No provider details yet"}
+                  {latest && <span style={{ textTransform: "none", letterSpacing: 0, marginLeft: 8, opacity: 0.85 }}>· latest {latest.provider || "provider"}{latest.received_date ? ` ${fmtDate(latest.received_date)}` : ""}</span>}
+                </span>
+                <span style={{ display: "flex", gap: 8 }}>
+                  <button className="btn-primary" onClick={(e) => { e.stopPropagation(); onOpenRfp && onOpenRfp(); }}>RFP Details</button>
+                  <button className="btn-ghost" title={rfpDoc ? `Open ${rfpDoc.title || "the RFP"}` : "No RFP on file yet: add it in RFP Details"} onClick={(e) => { e.stopPropagation(); onViewRfp && onViewRfp(rfpDoc); }}>View RFP</button>
+                </span>
+              </div>
+            </div>
+          );
+        })()}
           </div>
         </div>
       </div>
@@ -8509,6 +8528,413 @@ function IspPropertyContractsModal({ property, contracts, properties, supabaseCl
 }
 
 
+// ---- RFP Details: provider proposals as they come in, side by side ----
+// Proposals arrive on the RFP template, as PDFs, in an email body or on a call.
+// Each one is a row in rfp_proposals with its terms itemized; the RFP itself
+// (and any consolidated comparison) lives in rfp_documents.
+const RFP_STATUS = {
+  requested: { label: "Requested", bg: "#2b3a5c", color: "#c9d6f5" },
+  received: { label: "Received", bg: "#1f4a5a", color: "#b8e6f5" },
+  revised: { label: "Revised", bg: "#2a4f5f", color: "#bfeaf7" },
+  shortlisted: { label: "Shortlisted", bg: "#5a4a1a", color: "#ffd98a" },
+  selected: { label: "Selected", bg: "#1f5a34", color: "#b8efc7" },
+  declined: { label: "Declined", bg: "#4a2a2a", color: "#f0b8b3" },
+  not_pursued: { label: "Not pursued", bg: "#33363f", color: "#b5bac6" },
+};
+const RFP_SOURCES = { rfp_template: "RFP template", pdf: "PDF proposal", email: "Email", call: "Call", other: "Other" };
+const RFP_PROGRAMS = ["Bulk", "Bulk light", "Bulk managed", "Retail / marketing", "Managed Wi-Fi", "Other"];
+const RFP_DOC_KINDS = { rfp: "RFP", consolidated: "Consolidated RFP", other: "Other" };
+const RFP_COMPARE = [
+  ["status", "Status"], ["received_date", "Received"], ["source", "Source"], ["program_type", "Program"],
+  ["bulk_rate", "Bulk rate (owner cost)"], ["speeds", "Speeds"], ["services", "Services"], ["term_text", "Term"],
+  ["escalator", "Escalator"], ["door_fee", "Door fee"], ["rev_share", "Revenue share"], ["capex", "Capital / equipment"],
+  ["install_timeline", "Install timeline"], ["common_area", "Common areas"], ["exclusivity", "Exclusivity"], ["termination", "Termination"],
+];
+const RFP_EDIT_FIELDS = [
+  ["provider", "Provider", "text"], ["status", "Status", "status"], ["source", "Source", "source"], ["source_detail", "Source detail", "text"],
+  ["received_date", "Received", "date"], ["program_type", "Program", "program"], ["bulk_rate", "Bulk rate (owner cost)", "text"],
+  ["bulk_rate_amount", "Bulk rate $/unit/mo", "number"], ["retail_rate", "Retail rate", "text"], ["speeds", "Speeds", "text"],
+  ["term_months", "Term (months)", "number"], ["term_text", "Term as proposed", "text"], ["escalator", "Escalator", "text"],
+  ["escalator_pct", "Escalator %", "number"], ["door_fee", "Door fee", "text"], ["door_fee_amount", "Door fee ($)", "number"],
+  ["rev_share", "Revenue share", "text"], ["capex", "Capital / equipment", "text"], ["install_timeline", "Install timeline", "text"],
+  ["common_area", "Common areas", "text"], ["exclusivity", "Exclusivity", "text"], ["termination", "Termination", "text"], ["notes", "Notes", "text"],
+];
+const rfpVal = (p, k) => {
+  const v = p[k];
+  if (k === "status") return (RFP_STATUS[v] || {}).label || v;
+  if (k === "source") return [RFP_SOURCES[v] || v, p.source_detail].filter(Boolean).join(" — ");
+  if (k === "received_date") return v ? ispDate(v) : null;
+  if (k === "services") return (v || []).join(", ") || null;
+  if (k === "bulk_rate") return v || (p.bulk_rate_amount != null ? `${ispMoney(p.bulk_rate_amount)}/unit/mo` : null);
+  if (k === "term_text") return v || (p.term_months ? ispTerm(p) : null);
+  if (k === "escalator") return v || (p.escalator_pct != null ? `${p.escalator_pct}%` : null);
+  if (k === "door_fee") return v || ispMoney(p.door_fee_amount);
+  return v == null || v === "" ? null : v;
+};
+function RfpStatusPill({ s }) {
+  const m = RFP_STATUS[s] || { label: s || "—", bg: "transparent", color: "var(--mut)" };
+  return <span className="pill" style={{ background: m.bg, color: m.color }}>{m.label}</span>;
+}
+async function rfpOpenFile(supabaseClient, path) {
+  const win = window.open("about:blank", "_blank");
+  const { data, error } = await supabaseClient.storage.from(ISP_BUCKET).createSignedUrl(path, 300);
+  if (error || !data || !data.signedUrl) { if (win) win.close(); throw new Error(error ? error.message : "no link returned"); }
+  if (win) win.location.href = data.signedUrl; else window.open(data.signedUrl, "_blank", "noopener");
+}
+async function rfpOpenDoc(supabaseClient, d) {
+  if (d.file_path) return rfpOpenFile(supabaseClient, d.file_path);
+  if (d.link) window.open(d.link, "_blank", "noopener");
+}
+async function rfpExtract(supabaseClient, id) {
+  const { data, error } = await supabaseClient.functions.invoke("extract-rfp-proposal", { body: { id } });
+  if (error) {
+    let msg = error.message;
+    try { const b = error.context && typeof error.context.json === "function" ? await error.context.json() : null; if (b && b.error) msg = b.error; } catch (e) {}
+    throw new Error(msg);
+  }
+  return data && data.proposal;
+}
+const rfpSafeName = (n) => String(n || "file").replace(/[^A-Za-z0-9._-]+/g, "_");
+
+// Add provider details: a PDF (read by Claude), pasted email text, or typed terms.
+function RfpAddProvider({ property, supabaseClient, userEmail, onAdded, onCancel }) {
+  const [f, setF] = useState({ provider: "", status: "received", source: "email", source_detail: "", received_date: TODAY, program_type: "", text: "" });
+  const [file, setFile] = useState(null);
+  const [read, setRead] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const set = (k) => (e) => setF((d) => ({ ...d, [k]: e.target.value }));
+  const isPdf = file && (/\.pdf$/i.test(file.name) || file.type === "application/pdf");
+  const canRead = isPdf || f.text.trim().length > 20;
+  const submit = async () => {
+    if (!f.provider.trim() && !canRead) { setMsg("Enter the provider, or attach a PDF / paste the email so Claude can find it."); return; }
+    setBusy(true); setMsg("Saving…");
+    try {
+      let file_path = null;
+      if (file) {
+        file_path = `rfp/${property.code}/proposals/${Date.now()}-${rfpSafeName(file.name)}`;
+        const up = await supabaseClient.storage.from(ISP_BUCKET).upload(file_path, file, { contentType: file.type || "application/octet-stream", upsert: false });
+        if (up.error) throw new Error(`Upload failed: ${up.error.message}`);
+      }
+      const ins = await supabaseClient.from("rfp_proposals").insert([{ property_code: property.code, provider: f.provider.trim() || null, status: f.status, source: f.source,
+        source_detail: f.source_detail.trim() || null, received_date: f.received_date || null, program_type: f.program_type || null,
+        source_text: f.text.trim() || null, file_path, file_name: file ? file.name : null, file_size: file ? file.size : null, created_by: userEmail || null,
+        extract_status: read && canRead ? "pending" : null }]).select().single();
+      if (ins.error) throw new Error(ins.error.message);
+      let row = ins.data;
+      if (read && canRead) {
+        setMsg("Reading the proposal with Claude… (under a minute)");
+        try { const d = await rfpExtract(supabaseClient, row.id); if (d) row = d; }
+        catch (x) { setMsg(`Saved, but Claude couldn't read it: ${x.message}. You can enter the terms with Edit fields.`); setBusy(false); onAdded(row, true); return; }
+      }
+      setBusy(false); setMsg(null); onAdded(row, false);
+    } catch (x) { setBusy(false); setMsg(x.message || String(x)); }
+  };
+  const lab = (l, el) => <label style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 12.5 }}><span className="field-label" style={{ margin: 0 }}>{l}</span>{el}</label>;
+  return (
+    <div style={{ border: "1px solid var(--border, #2c4170)", borderRadius: 10, padding: 14, marginBottom: 14 }}>
+      <div className="section-header" style={{ marginTop: 0 }}>Add provider details</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: "8px 12px" }}>
+        {lab("Provider", <input value={f.provider} onChange={set("provider")} placeholder="e.g. Comcast" />)}
+        {lab("Status", <select value={f.status} onChange={set("status")}>{Object.entries(RFP_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select>)}
+        {lab("Came in as", <select value={f.source} onChange={set("source")}>{Object.entries(RFP_SOURCES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>)}
+        {lab("Received", <input type="date" value={f.received_date} onChange={set("received_date")} />)}
+        {lab("Program", <select value={f.program_type} onChange={set("program_type")}><option value="">—</option>{RFP_PROGRAMS.map((o) => <option key={o}>{o}</option>)}</select>)}
+        {lab("From / reference", <input value={f.source_detail} onChange={set("source_detail")} placeholder="e.g. Nicole Carnahan, Oct 30 email" />)}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 12, marginTop: 10 }}>
+        {lab("Paste the email or notes", <textarea rows={5} value={f.text} onChange={set("text")} placeholder="Paste the provider's email body, or the terms from a call." style={{ resize: "vertical" }} />)}
+        <div>
+          <span className="field-label" style={{ margin: 0 }}>Attach the proposal</span>
+          <div style={{ fontSize: 12.5, margin: "4px 0 6px", opacity: 0.8 }}>The completed RFP template or the provider's PDF. PDFs are read by Claude; other files are attached for viewing.</div>
+          <input type="file" onChange={(e) => setFile(e.target.files && e.target.files[0] || null)} />
+          {file && <div style={{ fontSize: 12.5, marginTop: 4 }}>{file.name}{!isPdf && " (attached, not read: paste its terms to itemize them)"}</div>}
+          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, marginTop: 10 }}>
+            <input type="checkbox" checked={read && canRead} disabled={!canRead} onChange={(e) => setRead(e.target.checked)} /> Itemize the terms with Claude (uses the API)
+          </label>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
+        <button className="btn-primary" onClick={submit} disabled={busy}>Save provider details</button>
+        <button className="btn-ghost" onClick={onCancel} disabled={busy}>Cancel</button>
+        {msg && <span style={{ fontSize: 13, color: /couldn|fail|enter/i.test(msg) ? "#ff8f86" : undefined }}>{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+// One provider's proposal, itemized.
+function RfpProposalDetail({ proposal, property, supabaseClient, onClose, onChanged }) {
+  const [p, setP] = useState(proposal);
+  const [edit, setEdit] = useState(false);
+  const [draft, setDraft] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [showText, setShowText] = useState(false);
+  useEffect(() => { setP(proposal); }, [proposal]);
+  const save = async (patch) => {
+    setBusy(true); setMsg(null);
+    const { data, error } = await supabaseClient.from("rfp_proposals").update(patch).eq("id", p.id).select().single();
+    setBusy(false);
+    if (error) { setMsg(`Couldn't save: ${error.message}`); return false; }
+    setP(data); if (onChanged) onChanged(); return true;
+  };
+  const startEdit = () => { const d = {}; RFP_EDIT_FIELDS.forEach(([k]) => { d[k] = p[k]; }); setDraft(d); setEdit(true); };
+  const saveEdit = async () => {
+    const patch = {};
+    RFP_EDIT_FIELDS.forEach(([k, , t]) => { let v = draft[k]; if (t === "number") v = v === "" || v == null ? null : Number(v); else v = v === "" ? null : v; if (v !== p[k]) patch[k] = v; });
+    if (!Object.keys(patch).length) { setEdit(false); return; }
+    if (await save(patch)) setEdit(false);
+  };
+  const reread = async () => {
+    if (!window.confirm("Itemize this proposal again with Claude? Extracted terms will be replaced (status, source and notes are kept).")) return;
+    setBusy(true); setMsg("Reading with Claude…");
+    try { const d = await rfpExtract(supabaseClient, p.id); if (d) setP(d); setMsg(null); if (onChanged) onChanged(); } catch (x) { setMsg(x.message || String(x)); }
+    setBusy(false);
+  };
+  const remove = async () => {
+    if (!window.confirm(`Delete ${p.provider || "this provider"}'s details${p.file_path ? " and the attached file" : ""}? This can't be undone.`)) return;
+    setBusy(true);
+    const { error } = await supabaseClient.from("rfp_proposals").delete().eq("id", p.id);
+    if (!error && p.file_path) await supabaseClient.storage.from(ISP_BUCKET).remove([p.file_path]);
+    setBusy(false);
+    if (error) { setMsg(`Couldn't delete: ${error.message}`); return; }
+    if (onChanged) onChanged(); onClose();
+  };
+  const groups = useMemo(() => {
+    const g = new Map();
+    (p.line_items || []).forEach((li) => { const k = li.category || "Other"; if (!g.has(k)) g.set(k, []); g.get(k).push(li); });
+    return [...g.entries()];
+  }, [p.line_items]);
+  return (
+    <div className="modal-overlay" onClick={busy ? undefined : onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 980, width: "96vw", maxHeight: "92vh", overflowY: "auto" }}>
+       <div className="proto-dash" style={{ background: "transparent" }}>
+        <div className="modal-head">
+          <div>
+            <div className="field-label" style={{ margin: 0 }}>RFP Details — provider</div>
+            <h2 style={{ margin: "2px 0" }}>{p.provider || "Provider not named yet"}</h2>
+            <div style={{ fontSize: 13, opacity: 0.85 }}>{property.code} {property.name}{p.program_type ? ` · ${p.program_type}` : ""}</div>
+          </div>
+          <button className="icon-btn" onClick={onClose} disabled={busy}><X size={18} /></button>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", margin: "6px 0 12px" }}>
+          <select value={p.status} disabled={busy} onChange={(e) => save({ status: e.target.value })} title="Status">{Object.entries(RFP_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select>
+          <span style={{ fontSize: 13, opacity: 0.85 }}>{[RFP_SOURCES[p.source] || p.source, p.source_detail, p.received_date && `received ${ispDate(p.received_date)}`].filter(Boolean).join(" · ")}</span>
+          {p.file_path && <button className="btn-ghost" onClick={() => rfpOpenFile(supabaseClient, p.file_path).catch((x) => setMsg(`Couldn't open the file: ${x.message}`))}>View proposal</button>}
+          {p.source_text && <button className="btn-ghost" onClick={() => setShowText((v) => !v)}>{showText ? "Hide" : "Show"} email / notes</button>}
+          {!edit && <button className="btn-ghost" onClick={startEdit} disabled={busy}>Edit fields</button>}
+          <span style={{ flex: 1 }} />
+          <button className="btn-ghost" onClick={reread} disabled={busy || !(p.source_text || (p.file_path && /\.pdf$/i.test(p.file_path)))}>Itemize again</button>
+          <button className="btn-ghost" onClick={remove} disabled={busy} style={{ color: "#ff8f86" }}>Delete</button>
+        </div>
+        {msg && <div style={{ fontSize: 13, color: /couldn|fail|isn't|error/i.test(msg) ? "#ff8f86" : undefined, marginBottom: 10 }}>{msg}</div>}
+        {p.extract_status === "error" && <div className="banner" style={{ color: "#ffc7c1", marginBottom: 10 }}>{p.extract_error}</div>}
+        {p.extract_status === "pending" && <div className="dim" style={{ fontSize: 13, marginBottom: 10 }}>Claude is itemizing this proposal…</div>}
+        {showText && <pre style={{ whiteSpace: "pre-wrap", fontSize: 12.5, background: "rgba(255,255,255,0.04)", padding: 10, borderRadius: 8, maxHeight: 260, overflowY: "auto" }}>{p.source_text}</pre>}
+
+        {edit ? (
+          <div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: "8px 14px" }}>
+              {RFP_EDIT_FIELDS.map(([k, l, t]) => (
+                <label key={k} style={{ display: "flex", flexDirection: "column", gap: 3, fontSize: 12.5 }}>
+                  <span className="field-label" style={{ margin: 0 }}>{l}</span>
+                  {t === "status" ? <select value={draft[k] || ""} onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value }))}>{Object.entries(RFP_STATUS).map(([kk, v]) => <option key={kk} value={kk}>{v.label}</option>)}</select>
+                    : t === "source" ? <select value={draft[k] || ""} onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value }))}><option value="">—</option>{Object.entries(RFP_SOURCES).map(([kk, v]) => <option key={kk} value={kk}>{v}</option>)}</select>
+                    : t === "program" ? <select value={draft[k] || ""} onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value }))}><option value="">—</option>{RFP_PROGRAMS.map((o) => <option key={o}>{o}</option>)}</select>
+                    : <input type={t} value={draft[k] == null ? "" : String(draft[k]).slice(0, t === "date" ? 10 : undefined)} onChange={(e) => setDraft((d) => ({ ...d, [k]: e.target.value }))} />}
+                </label>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, margin: "12px 0" }}>
+              <button className="btn-primary" onClick={saveEdit} disabled={busy}>Save</button>
+              <button className="btn-ghost" onClick={() => setEdit(false)} disabled={busy}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 8, marginBottom: 16 }}>
+            {RFP_COMPARE.filter(([k]) => !["status", "source", "received_date"].includes(k)).concat([["retail_rate", "Retail rate"], ["notes", "Notes"]]).map(([k, l]) => {
+              const v = rfpVal(p, k);
+              return (
+                <div key={k} className="contract-date-row" style={{ flexDirection: "column", alignItems: "flex-start", gap: 2 }}>
+                  <span className="field-label" style={{ margin: 0 }}>{l}</span>
+                  <span style={{ fontSize: 13 }}>{v == null ? <span style={{ color: "var(--mut)" }}>Not stated</span> : String(v)}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {(p.concerns || []).length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <div className="section-header">Concerns</div>
+            <ul style={{ margin: "6px 0", paddingLeft: 20, fontSize: 13 }}>{p.concerns.map((r, i) => <li key={i} style={{ color: "#ffc7c1" }}>{r}</li>)}</ul>
+          </div>
+        )}
+        {(p.key_points || []).length > 0 && (
+          <div style={{ marginBottom: 14 }}>
+            <div className="section-header">Key points</div>
+            <ul style={{ margin: "6px 0", paddingLeft: 20, fontSize: 13 }}>{p.key_points.map((r, i) => <li key={i}>{r}</li>)}</ul>
+          </div>
+        )}
+        <div className="section-header">Itemized terms ({(p.line_items || []).length})</div>
+        {groups.length === 0 ? <div className="dim" style={{ fontSize: 13 }}>No itemized terms yet. Attach the proposal or paste the email and use Itemize again, or enter the main terms with Edit fields.</div> : (
+          <div className="tw">
+            <table>
+              <thead><tr><th>Category</th><th>Term</th><th>Proposed</th><th>Where</th></tr></thead>
+              <tbody>
+                {groups.map(([cat, items]) => items.map((li, i) => (
+                  <tr key={cat + i}>
+                    <td style={{ whiteSpace: "nowrap", opacity: i ? 0 : 1 }}>{cat}</td>
+                    <td style={{ fontSize: 12.5 }}>{li.item}</td>
+                    <td style={{ fontSize: 12.5 }}>{li.value}</td>
+                    <td style={{ fontSize: 12, opacity: 0.75, whiteSpace: "nowrap" }}>{li.section || ""}</td>
+                  </tr>
+                )))}
+              </tbody>
+            </table>
+          </div>
+        )}
+       </div>
+      </div>
+    </div>
+  );
+}
+
+// The RFP and consolidated RFP documents for a property.
+function RfpDocuments({ property, docs, supabaseClient, userEmail, onChanged }) {
+  const [kind, setKind] = useState("rfp");
+  const [file, setFile] = useState(null);
+  const [link, setLink] = useState("");
+  const [sent, setSent] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const add = async () => {
+    if (!file && !link.trim()) { setMsg("Choose a file or paste a link."); return; }
+    setBusy(true); setMsg(null);
+    try {
+      let file_path = null;
+      if (file) {
+        file_path = `rfp/${property.code}/documents/${Date.now()}-${rfpSafeName(file.name)}`;
+        const up = await supabaseClient.storage.from(ISP_BUCKET).upload(file_path, file, { contentType: file.type || "application/octet-stream", upsert: false });
+        if (up.error) throw new Error(`Upload failed: ${up.error.message}`);
+      }
+      const ins = await supabaseClient.from("rfp_documents").insert([{ property_code: property.code, kind, title: file ? file.name : link.trim(), sent_date: sent || null,
+        file_path, file_name: file ? file.name : null, file_size: file ? file.size : null, link: file ? null : link.trim(), created_by: userEmail || null }]);
+      if (ins.error) throw new Error(ins.error.message);
+      setFile(null); setLink(""); setSent(""); if (onChanged) onChanged();
+    } catch (x) { setMsg(x.message || String(x)); }
+    setBusy(false);
+  };
+  const remove = async (d) => {
+    if (!window.confirm(`Remove ${d.title || "this document"}?`)) return;
+    const { error } = await supabaseClient.from("rfp_documents").delete().eq("id", d.id);
+    if (!error && d.file_path) await supabaseClient.storage.from(ISP_BUCKET).remove([d.file_path]);
+    if (error) setMsg(`Couldn't remove: ${error.message}`); else if (onChanged) onChanged();
+  };
+  return (
+    <div>
+      {docs.length === 0 ? <div className="dim" style={{ fontSize: 13, marginBottom: 8 }}>No RFP on file yet.</div> : (
+        <div className="contract-dates-list" style={{ marginBottom: 10 }}>
+          {docs.map((d) => (
+            <div className="contract-date-row" key={d.id}>
+              <span style={{ fontSize: 13 }}><b>{RFP_DOC_KINDS[d.kind] || d.kind}</b> · {d.title}{d.sent_date ? ` · sent ${ispDate(d.sent_date)}` : ""}</span>
+              <span style={{ display: "flex", gap: 8 }}>
+                <button className="btn-ghost" onClick={() => rfpOpenDoc(supabaseClient, d).catch((x) => setMsg(`Couldn't open it: ${x.message}`))}>View</button>
+                <button className="link" style={{ color: "#ff8f86" }} onClick={() => remove(d)}>Remove</button>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <select value={kind} onChange={(e) => setKind(e.target.value)}>{Object.entries(RFP_DOC_KINDS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+        <input type="file" onChange={(e) => setFile(e.target.files && e.target.files[0] || null)} />
+        <span style={{ fontSize: 12.5, opacity: 0.7 }}>or</span>
+        <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="Paste a SharePoint / OneDrive link" style={{ minWidth: 240 }} />
+        <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}>Sent <input type="date" value={sent} onChange={(e) => setSent(e.target.value)} /></label>
+        <button className="btn-ghost" onClick={add} disabled={busy}>Add</button>
+        {msg && <span style={{ fontSize: 13, color: "#ff8f86" }}>{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+function RfpDetailsModal({ property, proposals, documents, supabaseClient, userEmail, onClose, onChanged }) {
+  const mine = (proposals || []).filter((x) => x.property_code === property.code)
+    .sort((a, b) => String(b.received_date || "").localeCompare(String(a.received_date || "")) || b.id - a.id);
+  const docs = (documents || []).filter((d) => d.property_code === property.code).sort((a, b) => b.id - a.id);
+  const [open, setOpen] = useState(null);
+  const [adding, setAdding] = useState(mine.length === 0);
+  const openP = open && mine.find((x) => x.id === open.id) || open;
+  const rows = RFP_COMPARE.filter(([k]) => mine.some((p) => rfpVal(p, k) != null));
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 1240, width: "96vw", maxHeight: "92vh", overflowY: "auto" }}>
+       <div className="proto-dash" style={{ background: "transparent" }}>
+        <div className="modal-head">
+          <div>
+            <div className="field-label" style={{ margin: 0 }}>RFP Details</div>
+            <h2 style={{ margin: "2px 0" }}><span className="mono" style={{ opacity: 0.7 }}>{property.code}</span> {property.name}</h2>
+            <div style={{ fontSize: 13, opacity: 0.8 }}>Provider terms as they come in, on the RFP template, as a PDF, in an email or on a call.</div>
+          </div>
+          <button className="icon-btn" onClick={onClose}><X size={18} /></button>
+        </div>
+
+        <div className="section-header">The RFP</div>
+        <RfpDocuments property={property} docs={docs} supabaseClient={supabaseClient} userEmail={userEmail} onChanged={onChanged} />
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 0 8px" }}>
+          <div className="section-header" style={{ margin: 0 }}>Providers ({mine.length})</div>
+          <span style={{ flex: 1 }} />
+          {!adding && <button className="btn-primary" onClick={() => setAdding(true)}>+ Add provider details</button>}
+        </div>
+        {adding && <RfpAddProvider property={property} supabaseClient={supabaseClient} userEmail={userEmail} onCancel={() => setAdding(false)}
+          onAdded={(row) => { setAdding(false); if (onChanged) onChanged(); setOpen(row); }} />}
+        {mine.length === 0 ? <div className="dim" style={{ fontSize: 13 }}>No provider details yet.</div> : (
+          <div className="tw" style={{ overflowX: "auto" }}>
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ minWidth: 150 }}>Term</th>
+                  {mine.map((p) => (
+                    <th key={p.id} style={{ minWidth: 200, verticalAlign: "top" }}>
+                      <button className="link" style={{ fontWeight: 700, fontSize: 14 }} onClick={() => setOpen(p)}>{p.provider || "Unnamed provider"}</button>
+                      <div style={{ marginTop: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", fontWeight: 400 }}>
+                        <RfpStatusPill s={p.status} />
+                        {p.extract_status === "pending" && <span style={{ fontSize: 11.5, opacity: 0.75 }}>itemizing…</span>}
+                        {(p.line_items || []).length > 0 && <span style={{ fontSize: 11.5, opacity: 0.75 }}>{p.line_items.length} items</span>}
+                      </div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.filter(([k]) => k !== "status").map(([k, l]) => (
+                  <tr key={k}>
+                    <td style={{ whiteSpace: "nowrap", fontSize: 12.5 }}>{l}</td>
+                    {mine.map((p) => { const v = rfpVal(p, k); return <td key={p.id} style={{ fontSize: 12.5, verticalAlign: "top" }}>{v == null ? <span style={{ color: "var(--mut)" }}>—</span> : String(v)}</td>; })}
+                  </tr>
+                ))}
+                <tr>
+                  <td style={{ fontSize: 12.5 }}>Concerns</td>
+                  {mine.map((p) => <td key={p.id} style={{ fontSize: 12.5, verticalAlign: "top", color: (p.concerns || []).length ? "#ffc7c1" : undefined }}>{(p.concerns || []).length ? p.concerns.join("; ") : <span style={{ color: "var(--mut)" }}>—</span>}</td>)}
+                </tr>
+                <tr>
+                  <td />
+                  {mine.map((p) => <td key={p.id}><button className="btn-ghost" onClick={() => setOpen(p)}>Itemized terms →</button></td>)}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+       </div>
+      </div>
+      {openP && <RfpProposalDetail proposal={openP} property={property} supabaseClient={supabaseClient} onClose={() => setOpen(null)} onChanged={onChanged} />}
+    </div>
+  );
+}
+
+
 function ChangeLogView({ rows, loading, error, onRefresh, properties, setProperties, supabaseClient, userEmail, onOpenProperty, toggleTodoFor, setRows }) {
   const [filter, setFilter] = useState("decisions");
   const [showReviewed, setShowReviewed] = useState(false);
@@ -9880,6 +10306,9 @@ function App() {
   const [ispContracts, setIspContracts] = useState([]);
   const [ispFor, setIspFor] = useState(null); // property code whose ISP contracts popup is open
   const [ispReturnTo, setIspReturnTo] = useState(null); // property record to reopen when the ISP popup closes
+  const [rfpProposals, setRfpProposals] = useState([]);
+  const [rfpDocs, setRfpDocs] = useState([]);
+  const [rfpFor, setRfpFor] = useState(null); // property code whose RFP Details popup is open
   const [mapFocus, setMapFocus] = useState(null); // { state, n } — opens the Client Map on a state
 
   // Real, genuinely shared data — backed by Supabase, not tied to Claude's
@@ -10008,13 +10437,14 @@ function App() {
       const { data: legisRow } = await supabaseClient.from("app_state").select("value").eq("key", LEGIS_STATE_KEY).maybeSingle();
       if (legisRow && legisRow.value && Array.isArray(legisRow.value.items)) setLegislation({ items: legisRow.value.items, notes: Array.isArray(legisRow.value.notes) ? legisRow.value.notes : [] });
       loadIspContracts();
+      loadRfp();
       loadChangeLog();
       setDataSyncStatus("shared");
 
       // Live updates from everyone else, from this point forward.
       // Drop any channels left from an earlier run first; adding callbacks to an
       // already-subscribed channel throws and leaves duplicate listeners behind.
-      const LIVE_TOPICS = ["realtime:properties-changes", "realtime:app-state-changes", "realtime:call-notes-changes", "realtime:isp-contracts-changes"];
+      const LIVE_TOPICS = ["realtime:properties-changes", "realtime:app-state-changes", "realtime:call-notes-changes", "realtime:isp-contracts-changes", "realtime:rfp-changes"];
       await Promise.all(supabaseClient.getChannels().filter((ch) => LIVE_TOPICS.includes(ch.topic)).map((ch) => supabaseClient.removeChannel(ch)));
 
       // One save writes every property row, so one change arrives as a burst of
@@ -10068,6 +10498,13 @@ function App() {
             setRegionsList(payload.new.value);
           }
         })
+        .subscribe();
+
+      let rfpTimer = null;
+      supabaseClient
+        .channel("rfp-changes")
+        .on("postgres_changes", { event: "*", schema: "public", table: "rfp_proposals" }, () => { clearTimeout(rfpTimer); rfpTimer = setTimeout(loadRfp, 600); })
+        .on("postgres_changes", { event: "*", schema: "public", table: "rfp_documents" }, () => { clearTimeout(rfpTimer); rfpTimer = setTimeout(loadRfp, 600); })
         .subscribe();
 
       let ispTimer = null;
@@ -10181,6 +10618,11 @@ function App() {
   const [showClosed, setShowClosed] = useState(false);
   const [showProspecting, setShowProspecting] = useState(true);
   const [programPropertyId, setProgramPropertyId] = useState(null);
+  function loadRfp() {
+    if (!supabaseClient) return;
+    supabaseClient.from("rfp_proposals").select("*").order("received_date", { ascending: false, nullsFirst: false }).then(({ data, error }) => { if (!error && data) setRfpProposals(data); });
+    supabaseClient.from("rfp_documents").select("*").order("id", { ascending: false }).then(({ data, error }) => { if (!error && data) setRfpDocs(data); });
+  }
   function loadIspContracts() {
     if (!supabaseClient) return;
     supabaseClient.from("isp_contracts").select("*").order("executed_date", { ascending: false, nullsFirst: false }).order("id", { ascending: false })
@@ -10832,6 +11274,11 @@ function App() {
         <IspContractsView contracts={ispContracts} properties={properties} supabaseClient={supabaseClient} onChanged={loadIspContracts} onOpenProperty={(p) => openProgram(p)} onOpenLegislation={openLegislation}
           legisItems={(legislation && legislation.items) || LEGIS_SEED} userEmail={session && session.user ? session.user.email : null} onApplyToTracker={applyIspToTracker} />
       )}
+      {rfpFor && properties.find((p) => p.code === rfpFor) && (
+        <RfpDetailsModal property={properties.find((p) => p.code === rfpFor)} proposals={rfpProposals} documents={rfpDocs} supabaseClient={supabaseClient}
+          userEmail={session && session.user ? session.user.email : null} onChanged={loadRfp}
+          onClose={() => { setRfpFor(null); if (ispReturnTo) { setProgramPropertyId(ispReturnTo); setIspReturnTo(null); } }} />
+      )}
       {ispFor && properties.find((p) => p.code === ispFor) && (
         <IspPropertyContractsModal property={properties.find((p) => p.code === ispFor)} contracts={ispContracts} properties={properties} supabaseClient={supabaseClient}
           userEmail={session && session.user ? session.user.email : null} onClose={() => { setIspFor(null); if (ispReturnTo) { setProgramPropertyId(ispReturnTo); setIspReturnTo(null); } }} onChanged={loadIspContracts} onOpenLegislation={openLegislation}
@@ -10874,7 +11321,9 @@ function App() {
       )}
 
       {programProperty && !phaseSel && (
-        <ProgramModal property={programProperty} onClose={closeProgram} onOpenPhase={openPhaseFromProgram} onSetManualStatus={setManualStatus} onSetDecision={setDecision} onSetPriority={setPriority} onUpdateAttribute={updateAttribute} onUpdateNotes={updateNotes} onUpdateNotesLog={updateNotesLog} onSetDDDate={setDDDate} onToggleDueDiligence={toggleDueDiligenceSelected} onToggleServiceOption={toggleServiceOption} onSetServiceContractDate={setServiceContractDate} onSetISPDate={setISPDate} onSetExpectedTCO={setExpectedTCO} onSetDeploymentLiveDate={setDeploymentLiveDate} onSetBillingMilestone={setBillingMilestone} ispCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind !== "consulting").length : 0} consultCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind === "consulting").length : 0} onOpenIspContracts={() => { if (!programProperty) return; setIspReturnTo(programPropertyId); setProgramPropertyId(null); setIspFor(programProperty.code); }} regionsList={regionsList} onAddRegion={addRegion} currentUserEmail={session && session.user ? session.user.email : null} />
+        <ProgramModal property={programProperty} onClose={closeProgram} onOpenPhase={openPhaseFromProgram} onSetManualStatus={setManualStatus} onSetDecision={setDecision} onSetPriority={setPriority} onUpdateAttribute={updateAttribute} onUpdateNotes={updateNotes} onUpdateNotesLog={updateNotesLog} onSetDDDate={setDDDate} onToggleDueDiligence={toggleDueDiligenceSelected} onToggleServiceOption={toggleServiceOption} onSetServiceContractDate={setServiceContractDate} onSetISPDate={setISPDate} onSetExpectedTCO={setExpectedTCO} onSetDeploymentLiveDate={setDeploymentLiveDate} onSetBillingMilestone={setBillingMilestone} ispCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind !== "consulting").length : 0} consultCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind === "consulting").length : 0} onOpenIspContracts={() => { if (!programProperty) return; setIspReturnTo(programPropertyId); setProgramPropertyId(null); setIspFor(programProperty.code); }} rfpProposals={programProperty ? rfpProposals.filter((x) => x.property_code === programProperty.code) : []} rfpDocs={programProperty ? rfpDocs.filter((d) => d.property_code === programProperty.code) : []}
+          onOpenRfp={() => { if (!programProperty) return; setIspReturnTo(programPropertyId); setProgramPropertyId(null); setRfpFor(programProperty.code); }}
+          onViewRfp={(d) => { if (d) { rfpOpenDoc(supabaseClient, d).catch((x) => window.alert(`Couldn't open the RFP: ${x.message}`)); } else if (programProperty) { setIspReturnTo(programPropertyId); setProgramPropertyId(null); setRfpFor(programProperty.code); } }} regionsList={regionsList} onAddRegion={addRegion} currentUserEmail={session && session.user ? session.user.email : null} />
       )}
 
       {phaseProperty && phaseSel && (
