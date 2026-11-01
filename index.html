@@ -375,6 +375,11 @@
         .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 26px; width: 100%; max-width: 560px; max-height: 88vh; overflow-y: auto; }
         .modal-wide { max-width: 680px; }
         .modal-dual-wide { max-width: 1100px; }
+        .modal.pm-wide { max-width: min(1320px, 94vw); }
+        .pm-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 28px; align-items: start; }
+        .pm-right { border-left: 1px solid var(--border); padding-left: 28px; }
+        .pm-right > .section-header:first-child, .pm-left > :first-child { margin-top: 0; }
+        @media (max-width: 980px) { .pm-grid { grid-template-columns: 1fr; } .pm-right { border-left: 0; padding-left: 0; border-top: 1px solid var(--border); padding-top: 18px; } }
         .modal-portfolio-overview { max-height: 88vh; }
         .modal-body { margin-top: 4px; }
         .modal-portfolio-overview .modal-body { overflow-y: auto; }
@@ -4679,7 +4684,7 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
+      <div className="modal pm-wide" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
             <span className="mono tag-code">{property.code}</span>
@@ -4693,6 +4698,8 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
           {!isProspect && <Pill color={PRIORITY_META[program.priority].color}>{program.priority} priority</Pill>}
         </div>
 
+        <div className="pm-grid">
+          <div className="pm-left">
         <div className="field-label">Status override</div>
         <div className="chip-row" style={{ marginBottom: 14 }}>
           <button className={`chip ${!program.manualStatus ? "chip-active" : ""}`} onClick={() => onSetManualStatus(null)}>Auto-computed</button>
@@ -4796,100 +4803,6 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
             </div>
           </div>
         )}
-
-        <div className="contract-dates-list" style={{ marginBottom: 10 }}>
-          <div className="contract-date-row">
-            <span className="field-label">Advisory Contract Drafted</span>
-            <span className="mono">{program.advisoryContractDrafted ? fmtDate(program.advisoryContractDrafted) : "Not yet"}</span>
-          </div>
-        </div>
-
-        <div className="field-label" style={{ marginBottom: 6 }}>Contracted services</div>
-        <div className="contract-dates-list" style={{ marginBottom: 18 }}>
-          {[["dueDiligence", "Due Diligence", "dueDiligence"], ["rfp", "RFP", "rfp"], ["programDesign", "Program Design", "programDesign"], ["deployment", "Deployment", "deployment"]].map(([optionKey, label, phaseKey]) => {
-            // The contract execution date for this specific service (its own
-            // date when added by amendment, else the advisory contract's
-            // execution date) — never a projected phase start.
-            const proposed = !!(program.selectedOptions && program.selectedOptions[optionKey]);
-            const executedDate = serviceExecutedDate(program, optionKey);
-            const draftOnly = proposed && !program.advisoryContractExecuted;
-            return (
-              <div key={optionKey} className="contract-date-row" style={executedDate ? { borderColor: "#007B0C" } : undefined}>
-                <span className="field-label">{label}</span>
-                <span className="mono" style={draftOnly ? { color: STATUS_META["Advisory Contracts Drafted"].color } : undefined}>
-                  {executedDate ? `Executed ${fmtDate(executedDate)}` : draftOnly ? "In draft — not executed" : "Not contracted"}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-        <div className="dim" style={{ fontSize: 11, marginTop: -12, marginBottom: 18 }}>
-          Each date is that service's contract execution date (an amendment that adds a service carries its own date). Set from the contract import. Due Diligence, when contracted, is bundled into RFP and bills at $0.
-        </div>
-
-        <div className="field-label" style={{ marginBottom: 6 }}>Billing milestones</div>
-        <div className="contract-dates-list bm-box" style={{ marginBottom: 6 }}>
-          {!program.advisoryContractExecuted ? (
-            <div className="contract-date-row"><span className="dim" style={{ fontSize: 12.5 }}>Billing milestones start once the advisory contract is executed.</span></div>
-          ) : BILLING_MILESTONES.map((def) => {
-            const st = billingMilestoneState(program, def);
-            const toggle = () => {
-              if (st.auto || !st.contracted) return;
-              onSetBillingMilestone(def.key, st.done ? null : { date: TODAY, by: currentUserEmail || null, at: new Date().toISOString() });
-            };
-            return (
-              <div key={def.key} className="contract-date-row" style={st.done ? { borderColor: "#007B0C" } : !st.contracted ? { opacity: 0.45 } : undefined}>
-                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: st.auto || !st.contracted ? "default" : "pointer" }}>
-                  <input type="checkbox" checked={st.done} disabled={st.auto || !st.contracted} onChange={toggle} />
-                  <span className="field-label" style={{ margin: 0 }}>{def.label}</span>
-                </label>
-                <span className="mono" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  {!st.contracted ? "Not contracted"
-                    : st.auto ? (st.date ? `${fmtDate(st.date)} · contract executed` : "Awaiting execution")
-                    : st.done ? (
-                      <>
-                        <input type="date" className="mono contract-date-input" value={st.date || ""} title={st.by ? `Checked by ${st.by}` : undefined}
-                          onChange={(e) => e.target.value && onSetBillingMilestone(def.key, { ...((program.billingMilestones || {})[def.key] || {}), date: e.target.value })} />
-                      </>
-                    ) : "Not yet"}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-        <div className="dim" style={{ fontSize: 11, marginBottom: 18 }}>
-          Check a segment when it's reached; that's the signal it can be billed. The date defaults to today and can be changed. Due Diligence/RFP Start follows the contract execution date.
-        </div>
-
-        <div className="field-label" style={{ marginBottom: 6 }}>ISP Contracts — Due Diligence</div>
-        <div className="contract-dates-list" style={{ marginBottom: 18 }}>
-          <div className="contract-date-row" style={{ cursor: "pointer" }} onClick={() => onOpenIspContracts && onOpenIspContracts()}>
-            <span className="field-label" style={{ margin: 0 }}>
-              {ispCount ? `${ispCount} ISP contract${ispCount === 1 ? "" : "s"} on file` : "No ISP contracts on file"}
-              {consultCount > 0 && <span className="pill" style={{ marginLeft: 8, background: "#5a3a1a", color: "#ffd2a0", fontSize: 11 }} title="A consulting agreement is on file for this property">⚑ {consultCount} consulting agreement{consultCount === 1 ? "" : "s"}</span>}
-            </span>
-            <button className="btn-primary" onClick={(e) => { e.stopPropagation(); onOpenIspContracts && onOpenIspContracts(); }}>Open repository</button>
-          </div>
-        </div>
-
-        <div className="contract-dates-list" style={{ marginBottom: 18 }}>
-          <div className="contract-date-row">
-            <span className="field-label">ISP Contract Executed</span>
-            <input
-              type="date" className="mono contract-date-input"
-              value={program.ispContractExecuted || ""}
-              onChange={(e) => onSetISPDate(e.target.value || null)}
-            />
-          </div>
-          <div className="contract-date-row">
-            <span className="field-label">Deployment Live Date</span>
-            <input
-              type="date" className="mono contract-date-input"
-              value={program.deploymentLiveDate || ""}
-              onChange={(e) => onSetDeploymentLiveDate(e.target.value || null)}
-            />
-          </div>
-        </div>
 
         <div className="section-header">Attributes</div>
         <div className="dim" style={{ fontSize: 11.5, marginBottom: 8 }}>
@@ -5053,6 +4966,108 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
             No agreement signed yet — this property is still in the pitch/prospect stage.
           </div>
         )}
+          </div>
+          <div className="pm-right">
+        <div className="section-header">Advisory Contract</div>
+        <div className="contract-dates-list" style={{ marginBottom: 10 }}>
+          <div className="contract-date-row">
+            <span className="field-label">Advisory Contract Drafted</span>
+            <span className="mono">{program.advisoryContractDrafted ? fmtDate(program.advisoryContractDrafted) : "Not yet"}</span>
+          </div>
+        </div>
+
+        <div className="field-label" style={{ marginBottom: 6 }}>Contracted services</div>
+        <div className="contract-dates-list" style={{ marginBottom: 18 }}>
+          {[["dueDiligence", "Due Diligence", "dueDiligence"], ["rfp", "RFP", "rfp"], ["programDesign", "Program Design", "programDesign"], ["deployment", "Deployment", "deployment"]].map(([optionKey, label, phaseKey]) => {
+            // The contract execution date for this specific service (its own
+            // date when added by amendment, else the advisory contract's
+            // execution date) — never a projected phase start.
+            const proposed = !!(program.selectedOptions && program.selectedOptions[optionKey]);
+            const executedDate = serviceExecutedDate(program, optionKey);
+            const draftOnly = proposed && !program.advisoryContractExecuted;
+            return (
+              <div key={optionKey} className="contract-date-row" style={executedDate ? { borderColor: "#007B0C" } : undefined}>
+                <span className="field-label">{label}</span>
+                <span className="mono" style={draftOnly ? { color: STATUS_META["Advisory Contracts Drafted"].color } : undefined}>
+                  {executedDate ? `Executed ${fmtDate(executedDate)}` : draftOnly ? "In draft — not executed" : "Not contracted"}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="dim" style={{ fontSize: 11, marginTop: -12, marginBottom: 18 }}>
+          Each date is that service's contract execution date (an amendment that adds a service carries its own date). Set from the contract import. Due Diligence, when contracted, is bundled into RFP and bills at $0.
+        </div>
+
+        <div className="field-label" style={{ marginBottom: 6 }}>Billing milestones</div>
+        <div className="contract-dates-list bm-box" style={{ marginBottom: 6 }}>
+          {!program.advisoryContractExecuted ? (
+            <div className="contract-date-row"><span className="dim" style={{ fontSize: 12.5 }}>Billing milestones start once the advisory contract is executed.</span></div>
+          ) : BILLING_MILESTONES.map((def) => {
+            const st = billingMilestoneState(program, def);
+            const toggle = () => {
+              if (st.auto || !st.contracted) return;
+              onSetBillingMilestone(def.key, st.done ? null : { date: TODAY, by: currentUserEmail || null, at: new Date().toISOString() });
+            };
+            return (
+              <div key={def.key} className="contract-date-row" style={st.done ? { borderColor: "#007B0C" } : !st.contracted ? { opacity: 0.45 } : undefined}>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: st.auto || !st.contracted ? "default" : "pointer" }}>
+                  <input type="checkbox" checked={st.done} disabled={st.auto || !st.contracted} onChange={toggle} />
+                  <span className="field-label" style={{ margin: 0 }}>{def.label}</span>
+                </label>
+                <span className="mono" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  {!st.contracted ? "Not contracted"
+                    : st.auto ? (st.date ? `${fmtDate(st.date)} · contract executed` : "Awaiting execution")
+                    : st.done ? (
+                      <>
+                        <input type="date" className="mono contract-date-input" value={st.date || ""} title={st.by ? `Checked by ${st.by}` : undefined}
+                          onChange={(e) => e.target.value && onSetBillingMilestone(def.key, { ...((program.billingMilestones || {})[def.key] || {}), date: e.target.value })} />
+                      </>
+                    ) : "Not yet"}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="dim" style={{ fontSize: 11, marginBottom: 18 }}>
+          Check a segment when it's reached; that's the signal it can be billed. The date defaults to today and can be changed. Due Diligence/RFP Start follows the contract execution date.
+        </div>
+
+        <div className="section-header">ISP Contracts</div>
+        <div className="field-label" style={{ marginBottom: 6 }}>Existing agreements — Due Diligence</div>
+        <div className="contract-dates-list" style={{ marginBottom: 18 }}>
+          <div className="contract-date-row" style={{ cursor: "pointer" }} onClick={() => onOpenIspContracts && onOpenIspContracts()}>
+            <span className="field-label" style={{ margin: 0 }}>
+              {ispCount ? `${ispCount} ISP contract${ispCount === 1 ? "" : "s"} on file` : "No ISP contracts on file"}
+              {consultCount > 0 && <span className="pill" style={{ marginLeft: 8, background: "#5a3a1a", color: "#ffd2a0", fontSize: 11 }} title="A consulting agreement is on file for this property">⚑ {consultCount} consulting agreement{consultCount === 1 ? "" : "s"}</span>}
+            </span>
+            <button className="btn-primary" onClick={(e) => { e.stopPropagation(); onOpenIspContracts && onOpenIspContracts(); }}>Open repository</button>
+          </div>
+        </div>
+
+        <div className="contract-dates-list" style={{ marginBottom: 18 }}>
+          <div className="contract-date-row">
+            <span className="field-label">ISP Contract Executed</span>
+            <input
+              type="date" className="mono contract-date-input"
+              value={program.ispContractExecuted || ""}
+              onChange={(e) => onSetISPDate(e.target.value || null)}
+            />
+          </div>
+          <div className="contract-date-row">
+            <span className="field-label">Deployment Live Date</span>
+            <input
+              type="date" className="mono contract-date-input"
+              value={program.deploymentLiveDate || ""}
+              onChange={(e) => onSetDeploymentLiveDate(e.target.value || null)}
+            />
+          </div>
+        </div>
+
+        <div className="section-header">New Provider Deals</div>
+        <div className="dim" style={{ fontSize: 12, marginBottom: 18 }}>Provider proposals, the consolidated RFP and agreements executed through Advisory Services will be tracked here.</div>
+          </div>
+        </div>
       </div>
     </div>
   );
