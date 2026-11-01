@@ -9864,6 +9864,7 @@ function App() {
   const [legislation, setLegislation] = useState(null); // null = use the built-in research baseline
   const [ispContracts, setIspContracts] = useState([]);
   const [ispFor, setIspFor] = useState(null); // property code whose ISP contracts popup is open
+  const [ispReturnTo, setIspReturnTo] = useState(null); // property record to reopen when the ISP popup closes
   const [mapFocus, setMapFocus] = useState(null); // { state, n } — opens the Client Map on a state
 
   // Real, genuinely shared data — backed by Supabase, not tied to Claude's
@@ -10178,7 +10179,7 @@ function App() {
       old_value: oldv || null, new_value: newv, reason: `From ISP contract ${contract.provider || contract.file_name}${contract.agreement_title ? ` (${contract.agreement_title})` : ""}`, source: "ISP contract" })))
       .then(() => loadChangeLog());
   };
-  const openLegislation = (st) => { setIspFor(null); setProgramPropertyId(null); setMapFocus({ state: st, n: Date.now() }); setView("map"); };
+  const openLegislation = (st) => { setIspFor(null); setIspReturnTo(null); setProgramPropertyId(null); setMapFocus({ state: st, n: Date.now() }); setView("map"); };
   const [phaseSel, setPhaseSel] = useState(null);
   const [econModelOpen, setEconModelOpen] = useState(false);
   const [queueStakeholder, setQueueStakeholder] = useState(null);
@@ -10818,7 +10819,7 @@ function App() {
       )}
       {ispFor && properties.find((p) => p.code === ispFor) && (
         <IspPropertyContractsModal property={properties.find((p) => p.code === ispFor)} contracts={ispContracts} properties={properties} supabaseClient={supabaseClient}
-          userEmail={session && session.user ? session.user.email : null} onClose={() => setIspFor(null)} onChanged={loadIspContracts} onOpenLegislation={openLegislation}
+          userEmail={session && session.user ? session.user.email : null} onClose={() => { setIspFor(null); if (ispReturnTo) { setProgramPropertyId(ispReturnTo); setIspReturnTo(null); } }} onChanged={loadIspContracts} onOpenLegislation={openLegislation}
           legisItems={(legislation && legislation.items) || LEGIS_SEED} onApplyToTracker={applyIspToTracker} />
       )}
       {view === "changelog" && (
@@ -10858,7 +10859,7 @@ function App() {
       )}
 
       {programProperty && !phaseSel && (
-        <ProgramModal property={programProperty} onClose={closeProgram} onOpenPhase={openPhaseFromProgram} onSetManualStatus={setManualStatus} onSetDecision={setDecision} onSetPriority={setPriority} onUpdateAttribute={updateAttribute} onUpdateNotes={updateNotes} onUpdateNotesLog={updateNotesLog} onSetDDDate={setDDDate} onToggleDueDiligence={toggleDueDiligenceSelected} onToggleServiceOption={toggleServiceOption} onSetServiceContractDate={setServiceContractDate} onSetISPDate={setISPDate} onSetExpectedTCO={setExpectedTCO} onSetDeploymentLiveDate={setDeploymentLiveDate} onSetBillingMilestone={setBillingMilestone} ispCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind !== "consulting").length : 0} consultCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind === "consulting").length : 0} onOpenIspContracts={() => programProperty && setIspFor(programProperty.code)} regionsList={regionsList} onAddRegion={addRegion} currentUserEmail={session && session.user ? session.user.email : null} />
+        <ProgramModal property={programProperty} onClose={closeProgram} onOpenPhase={openPhaseFromProgram} onSetManualStatus={setManualStatus} onSetDecision={setDecision} onSetPriority={setPriority} onUpdateAttribute={updateAttribute} onUpdateNotes={updateNotes} onUpdateNotesLog={updateNotesLog} onSetDDDate={setDDDate} onToggleDueDiligence={toggleDueDiligenceSelected} onToggleServiceOption={toggleServiceOption} onSetServiceContractDate={setServiceContractDate} onSetISPDate={setISPDate} onSetExpectedTCO={setExpectedTCO} onSetDeploymentLiveDate={setDeploymentLiveDate} onSetBillingMilestone={setBillingMilestone} ispCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind !== "consulting").length : 0} consultCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind === "consulting").length : 0} onOpenIspContracts={() => { if (!programProperty) return; setIspReturnTo(programPropertyId); setProgramPropertyId(null); setIspFor(programProperty.code); }} regionsList={regionsList} onAddRegion={addRegion} currentUserEmail={session && session.user ? session.user.email : null} />
       )}
 
       {phaseProperty && phaseSel && (
