@@ -8601,6 +8601,17 @@ async function rfpExtract(supabaseClient, id) {
   }
   return data && data.proposal;
 }
+async function rfpFillFromDocument(supabaseClient, id, userEmail) {
+  const { data, error } = await supabaseClient.functions.invoke("extract-rfp-document", { body: { id, userEmail } });
+  if (error) {
+    let msg = error.message;
+    try { const b = error.context && typeof error.context.json === "function" ? await error.context.json() : null; if (b && b.error) msg = b.error; } catch (e) {}
+    throw new Error(msg);
+  }
+  return (data && data.providers) || [];
+}
+const rfpReadable = (name) => /\.(pdf|xlsx|xlsm|xls|csv)$/i.test(String(name || ""));
+const rfpFillSummary = (prov) => !prov || !prov.length ? "No provider terms found in it" : `${prov.filter((x) => x.action === "added").length} provider(s) added, ${prov.filter((x) => x.action === "updated").length} updated: ${prov.map((x) => x.provider).join(", ")}`;
 const rfpSafeName = (n) => String(n || "file").replace(/[^A-Za-z0-9._-]+/g, "_");
 
 // Add provider details: a PDF (read by Claude), pasted email text, or typed terms.
@@ -8611,7 +8622,7 @@ function RfpAddProvider({ property, supabaseClient, userEmail, onAdded, onCancel
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
   const set = (k) => (e) => setF((d) => ({ ...d, [k]: e.target.value }));
-  const isPdf = file && (/\.pdf$/i.test(file.name) || file.type === "application/pdf");
+  const isPdf = file && (/\.(pdf|xlsx|xlsm|xls|csv)$/i.test(file.name) || file.type === "application/pdf");
   const canRead = isPdf || f.text.trim().length > 20;
   const submit = async () => {
     if (!f.provider.trim() && !canRead) { setMsg("Enter the provider, or attach a PDF / paste the email so Claude can find it."); return; }
@@ -8653,7 +8664,7 @@ function RfpAddProvider({ property, supabaseClient, userEmail, onAdded, onCancel
         {lab("Paste the email or notes", <textarea rows={5} value={f.text} onChange={set("text")} placeholder="Paste the provider's email body, or the terms from a call." style={{ resize: "vertical" }} />)}
         <div>
           <span className="field-label" style={{ margin: 0 }}>Attach the proposal</span>
-          <div style={{ fontSize: 12.5, margin: "4px 0 6px", opacity: 0.8 }}>The completed RFP template or the provider's PDF. PDFs are read by Claude; other files are attached for viewing.</div>
+          <div style={{ fontSize: 12.5, margin: "4px 0 6px", opacity: 0.8 }}>The completed RFP template or the provider's proposal. PDF and Excel files are read by Claude; other files are attached for viewing.</div>
           <input type="file" onChange={(e) => setFile(e.target.files && e.target.files[0] || null)} />
           {file && <div style={{ fontSize: 12.5, marginTop: 4 }}>{file.name}{!isPdf && " (attached, not read: paste its terms to itemize them)"}</div>}
           <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, marginTop: 10 }}>
@@ -8732,7 +8743,7 @@ function RfpProposalDetail({ proposal, property, supabaseClient, onClose, onChan
           {p.source_text && <button className="btn-ghost" onClick={() => setShowText((v) => !v)}>{showText ? "Hide" : "Show"} email / notes</button>}
           {!edit && <button className="btn-ghost" onClick={startEdit} disabled={busy}>Edit fields</button>}
           <span style={{ flex: 1 }} />
-          <button className="btn-ghost" onClick={reread} disabled={busy || !(p.source_text || (p.file_path && /\.pdf$/i.test(p.file_path)))}>Itemize again</button>
+          <button className="btn-ghost" onClick={reread} disabled={busy || !(p.source_text || (p.file_path && rfpReadable(p.file_path)))}>Itemize again</button>
           <button className="btn-ghost" onClick={remove} disabled={busy} style={{ color: "#ff8f86" }}>Delete</button>
         </div>
         {msg && <div style={{ fontSize: 13, color: /couldn|fail|isn't|error/i.test(msg) ? "#ff8f86" : undefined, marginBottom: 10 }}>{msg}</div>}
@@ -8815,6 +8826,14 @@ function RfpDocuments({ property, docs, supabaseClient, userEmail, onChanged }) 
   const [sent, setSent] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [fill, setFill] = useState(true);
+  const [filling, setFilling] = useState(null);
+  const runFill = async (docId) => {
+    setFilling(docId); setMsg("Reading provider details from the document with Claude… (about a minute)");
+    try { const prov = await rfpFillFromDocument(supabaseClient, docId, userEmail); setMsg(rfpFillSummary(prov) + "."); }
+    catch (x) { setMsg(`Couldn't fill provider details: ${x.message}`); }
+    setFilling(null); if (onChanged) onChanged();
+  };
   const add = async () => {
     if (!file && !link.trim()) { setMsg("Choose a file or paste a link."); return; }
     setBusy(true); setMsg(null);
@@ -8826,9 +8845,13 @@ function RfpDocuments({ property, docs, supabaseClient, userEmail, onChanged }) 
         if (up.error) throw new Error(`Upload failed: ${up.error.message}`);
       }
       const ins = await supabaseClient.from("rfp_documents").insert([{ property_code: property.code, kind, title: file ? file.name : link.trim(), sent_date: sent || null,
-        file_path, file_name: file ? file.name : null, file_size: file ? file.size : null, link: file ? null : link.trim(), created_by: userEmail || null }]);
+        file_path, file_name: file ? file.name : null, file_size: file ? file.size : null, link: file ? null : link.trim(), created_by: userEmail || null }]).select();
       if (ins.error) throw new Error(ins.error.message);
+      const readIt = fill && file && rfpReadable(file.name);
       setFile(null); setLink(""); setSent(""); if (onChanged) onChanged();
+      setBusy(false);
+      if (readIt && ins.data && ins.data[0]) await runFill(ins.data[0].id);
+      return;
     } catch (x) { setMsg(x.message || String(x)); }
     setBusy(false);
   };
@@ -8844,8 +8867,11 @@ function RfpDocuments({ property, docs, supabaseClient, userEmail, onChanged }) 
         <div className="contract-dates-list" style={{ marginBottom: 10 }}>
           {docs.map((d) => (
             <div className="contract-date-row" key={d.id}>
-              <span style={{ fontSize: 13 }}><b>{RFP_DOC_KINDS[d.kind] || d.kind}</b> · {d.title}{d.sent_date ? ` · sent ${ispDate(d.sent_date)}` : ""}</span>
+              <span style={{ fontSize: 13 }}><b>{RFP_DOC_KINDS[d.kind] || d.kind}</b> · {d.title}{d.sent_date ? ` · sent ${ispDate(d.sent_date)}` : ""}
+                {d.extract_status === "done" && <span style={{ opacity: 0.7 }}> · providers filled {ispDate(d.extracted_at)}</span>}
+                {d.extract_status === "error" && <span style={{ color: "#ff8f86" }} title={d.extract_error || ""}> · couldn't fill providers</span>}</span>
               <span style={{ display: "flex", gap: 8 }}>
+                {d.file_path && rfpReadable(d.file_name) && <button className="btn-ghost" disabled={!!filling} title={d.extracted_at ? `Last filled ${ispDate(d.extracted_at)}: ${rfpFillSummary(d.providers)}` : "Fill each provider's terms from this document into the table below"} onClick={() => runFill(d.id)}>{filling === d.id ? "Reading…" : d.extract_status === "done" ? "Refill providers" : "Fill providers"}</button>}
                 <button className="btn-ghost" onClick={() => rfpOpenDoc(supabaseClient, d).catch((x) => setMsg(`Couldn't open it: ${x.message}`))}>View</button>
                 <button className="link" style={{ color: "#ff8f86" }} onClick={() => remove(d)}>Remove</button>
               </span>
@@ -8859,8 +8885,9 @@ function RfpDocuments({ property, docs, supabaseClient, userEmail, onChanged }) 
         <span style={{ fontSize: 12.5, opacity: 0.7 }}>or</span>
         <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="Paste a SharePoint / OneDrive link" style={{ minWidth: 240 }} />
         <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}>Sent <input type="date" value={sent} onChange={(e) => setSent(e.target.value)} /></label>
-        <button className="btn-ghost" onClick={add} disabled={busy}>Add</button>
-        {msg && <span style={{ fontSize: 13, color: "#ff8f86" }}>{msg}</span>}
+        <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }} title="Reads each provider's terms from an uploaded PDF or Excel file into the table below (uses the API)"><input type="checkbox" checked={fill} onChange={(e) => setFill(e.target.checked)} /> Fill provider details from it</label>
+        <button className="btn-ghost" onClick={add} disabled={busy || !!filling}>Add</button>
+        {msg && <span style={{ fontSize: 13, color: /couldn|fail|choose/i.test(msg) ? "#ff8f86" : undefined }}>{msg}</span>}
       </div>
     </div>
   );
@@ -8955,6 +8982,7 @@ function rfpGuessProperty(fileName, properties) {
 function RfpBulkUpload({ properties, supabaseClient, userEmail }) {
   const [rows, setRows] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [fill, setFill] = useState(true);
   const fileRef = React.useRef(null);
   const sorted = useMemo(() => properties.slice().sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true })), [properties]);
   const setRow = (i, patch) => setRows((xs) => xs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
@@ -8976,9 +9004,14 @@ function RfpBulkUpload({ properties, supabaseClient, userEmail }) {
         const up = await supabaseClient.storage.from(ISP_BUCKET).upload(path, r.file, { contentType: r.file.type || "application/octet-stream", upsert: false });
         if (up.error) throw new Error(`Upload failed: ${up.error.message}`);
         const ins = await supabaseClient.from("rfp_documents").insert([{ property_code: r.code, kind: r.kind, title: r.file.name, sent_date: r.sent || null,
-          file_path: path, file_name: r.file.name, file_size: r.file.size, created_by: userEmail || null }]);
+          file_path: path, file_name: r.file.name, file_size: r.file.size, created_by: userEmail || null }]).select();
         if (ins.error) throw new Error(ins.error.message);
         setRow(i, { state: `Added to ${r.code}`, ok: true });
+        if (fill && rfpReadable(r.file.name) && ins.data && ins.data[0]) {
+          setRow(i, { state: `Added to ${r.code}; reading provider details…` });
+          try { const prov = await rfpFillFromDocument(supabaseClient, ins.data[0].id, userEmail); setRow(i, { state: `Added to ${r.code}. ${rfpFillSummary(prov)}` }); }
+          catch (x) { setRow(i, { state: `Added to ${r.code}, but provider details couldn't be read: ${x.message}`, err: true }); }
+        }
       } catch (x) { setRow(i, { state: x.message || String(x), err: true }); }
     }
     setBusy(false);
@@ -8988,13 +9021,14 @@ function RfpBulkUpload({ properties, supabaseClient, userEmail }) {
   return (
     <div>
       <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
-        Select one or more RFP files (PDF, Word, Excel). Each is paired to a property from its file name (P-code, property name or a former name); check the pairing, choose RFP or Consolidated RFP, and upload. They show under View RFP and in RFP Details on each property. Provider proposals are added in RFP Details.
+        Select one or more RFP files (PDF, Word, Excel). Each is paired to a property from its file name (P-code, property name or a former name); check the pairing, choose RFP or Consolidated RFP, and upload. They show under View RFP and in RFP Details on each property. Where a PDF or Excel file has provider responses (a consolidated RFP or a completed template), each provider's terms are filled into RFP Details: new providers are added, and existing ones are only filled where blank.
       </div>
       <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={onFiles} />
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <button className="btn-ghost" onClick={() => fileRef.current && fileRef.current.click()} disabled={busy}>Choose files</button>
         {rows.length > 0 && <button className="btn-primary" onClick={upload} disabled={busy || !pending.length || unpaired === pending.length}>Upload {pending.length - unpaired} file{pending.length - unpaired === 1 ? "" : "s"}</button>}
         {unpaired > 0 && <span style={{ fontSize: 12.5, color: "#ffd98a", alignSelf: "center" }}>{unpaired} need a property</span>}
+        <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={fill} disabled={busy} onChange={(e) => setFill(e.target.checked)} /> Fill provider details from PDF / Excel files (uses the API)</label>
       </div>
       {rows.length > 0 && (
         <div className="contract-dates-list">
