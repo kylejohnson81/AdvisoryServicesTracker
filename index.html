@@ -2913,7 +2913,7 @@ function RevenueImportModal({ onClose, onSave, previous, properties }) {
   };
   const row = (k, v) => <div className="contract-date-row"><span className="field-label">{k}</span><span className="mono">{v}</span></div>;
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal modal-wide" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div><div className="field-label">Billing</div><h2>Import Revenue Tracker</h2></div>
@@ -3591,7 +3591,7 @@ function OwnerRecordModal({ ownerName, record, items, clientNotes, onSave, onClo
   const jvCount = items.length - clientCount;
 
   return (
-    <div className="modal-overlay" onClick={close}>
+    <div className="modal-overlay">
       <div className="modal modal-dual-wide owner-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
@@ -4683,7 +4683,7 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal pm-wide" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
@@ -4729,7 +4729,7 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
         </div>
 
         {notesOpen && (
-          <div className="modal-overlay" onClick={() => setNotesOpen(false)}>
+          <div className="modal-overlay">
             <div className="modal nlog-scope" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 700 }}>
               <div className="modal-head" style={{ borderBottom: "1px solid var(--line)" }}>
                 <h2 style={{ color: "var(--txt)" }}>Notes Log — {property.name}</h2>
@@ -4781,7 +4781,7 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
         )}
 
         {historyOpen && (
-          <div className="modal-overlay" onClick={() => setHistoryOpen(false)}>
+          <div className="modal-overlay">
             <div className="modal nlog-scope" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 700 }}>
               <div className="modal-head" style={{ borderBottom: "1px solid var(--line)" }}>
                 <h2 style={{ color: "var(--txt)" }}>History — {property.name}</h2>
@@ -5242,7 +5242,7 @@ function PhaseModal({ property, phaseKey, onClose, onToggleTodo, onAddTodo, onTo
   if (!phase) return null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className={`modal modal-wide ${phase.subPhases ? "modal-dual-wide" : ""}`} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
@@ -5533,7 +5533,7 @@ function EconomicModelModal({ property, onClose, onSave }) {
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal modal-wide econ-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
@@ -6621,7 +6621,7 @@ function WorkQueueModal({ stakeholder, items, onClose, onOpenPhase, onToggleDone
   }, [items]);
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
@@ -7309,7 +7309,7 @@ function ImportExportModal({ section: initialSection = "import", onClose, proper
   const fmtV = (v) => (v === null || v === undefined || v === "") ? "(blank)" : String(v);
 
   return (
-    <div className="modal-overlay" onClick={busy ? undefined : onClose}>
+    <div className="modal-overlay">
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 860, width: "95vw" }}>
         <div className="modal-head">
           <div>
@@ -8274,7 +8274,7 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
   ];
 
   return (
-    <div className="modal-overlay" onClick={busy ? undefined : onClose}>
+    <div className="modal-overlay">
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 980, width: "96vw", maxHeight: "92vh", overflowY: "auto" }}>
        <div className="proto-dash" style={{ background: "transparent" }}>
         <div className="modal-head">
@@ -8509,7 +8509,7 @@ function IspPropertyContractsModal({ property, contracts, properties, supabaseCl
   const st = ispStateOf({}, property);
   const openC = open && mine.find((c) => c.id === open.id) || open;
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 1180, width: "96vw", maxHeight: "92vh", overflowY: "auto" }}>
         <div className="modal-head">
           <div>
@@ -8714,7 +8714,7 @@ function RfpProposalDetail({ proposal, property, supabaseClient, onClose, onChan
     return [...g.entries()];
   }, [p.line_items]);
   return (
-    <div className="modal-overlay" onClick={busy ? undefined : onClose}>
+    <div className="modal-overlay">
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 980, width: "96vw", maxHeight: "92vh", overflowY: "auto" }}>
        <div className="proto-dash" style={{ background: "transparent" }}>
         <div className="modal-head">
@@ -8875,7 +8875,7 @@ function RfpDetailsModal({ property, proposals, documents, supabaseClient, userE
   const openP = open && mine.find((x) => x.id === open.id) || open;
   const rows = RFP_COMPARE.filter(([k]) => mine.some((p) => rfpVal(p, k) != null));
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay">
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 1240, width: "96vw", maxHeight: "92vh", overflowY: "auto" }}>
        <div className="proto-dash" style={{ background: "transparent" }}>
         <div className="modal-head">
@@ -10298,7 +10298,7 @@ function DocumentsModal({ onClose, supabaseClient }) {
   const shownLinks = DOC_LINKS.filter((l) => !q || `${l.name} ${l.note || ""}`.toLowerCase().includes(q.toLowerCase()));
 
   return (
-    <div className="modal-overlay" onClick={busy ? undefined : onClose}>
+    <div className="modal-overlay">
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 760, width: "95vw" }}>
         <div className="modal-head">
           <div>
