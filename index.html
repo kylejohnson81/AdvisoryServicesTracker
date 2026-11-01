@@ -7332,6 +7332,13 @@ function ImportExportModal({ section: initialSection = "import", onClose, proper
           <div style={{ marginTop: 8 }}>
             {card("Billing Milestones", "Every contracted billing segment (Due Diligence/RFP Start and Complete, Program Design Start and Complete, Deployment Start) in Revenue Tracker layout, flagged for payment from the property record checkboxes and checked against the Revenue Tracker. The first tab lists what's ready to bill.",
               <button className="btn-primary" onClick={() => { try { const r = exportBillingMilestones(properties, billingImport); setExportNote(`Downloaded: ${r.ready} ready to bill${r.check ? `, ${r.check} to check (billed before the milestone was checked)` : ""}, ${r.total} milestones in all.`); } catch (x) { setExportNote(`Export failed: ${x.message || x}`); } }}>Download</button>)}
+            {card("RFP Details", "Every property's provider proposals as an Excel file: one row per provider with its terms, plus every itemized term. A single property's side-by-side export is in its RFP Details.",
+              <button className="btn-primary" onClick={async () => {
+                const { data, error } = await supabaseClient.from("rfp_proposals").select("*");
+                if (error) { setExportNote(`Couldn't load RFP Details: ${error.message}`); return; }
+                const r = exportRfpDetails(data || [], properties, null);
+                setExportNote(`Downloaded RFP Details: ${r.providers} provider proposal(s), ${r.items} itemized terms.`);
+              }}>Download</button>)}
             {card("Master Export", "Download every property, its attributes, phases and notes history as an Excel file.",
               <button className="btn-primary" onClick={() => { onExport(); }}>Download</button>)}
             {exportNote && <div style={{ fontSize: 13, opacity: 0.85, marginTop: 6 }}>{exportNote}</div>}
@@ -8578,6 +8585,49 @@ const rfpVal = (p, k) => {
   if (k === "door_fee") return v || ispMoney(p.door_fee_amount);
   return v == null || v === "" ? null : v;
 };
+// RFP Details export: one property (with a side-by-side sheet) or the whole portfolio.
+function exportRfpDetails(proposals, properties, property) {
+  const byCode = Object.fromEntries((properties || []).map((p) => [p.code, p]));
+  const list = (proposals || []).filter((x) => !property || x.property_code === property.code)
+    .slice().sort((a, b) => String(a.property_code).localeCompare(String(b.property_code), undefined, { numeric: true }) || String(a.provider || "").localeCompare(String(b.provider || "")));
+  const wb = XLSX.utils.book_new();
+  const add = (data, name, widths) => {
+    const ws = XLSX.utils.json_to_sheet(data.length ? data : [{ Note: "No provider details yet" }]);
+    ws["!cols"] = Object.keys(data[0] || { Note: "" }).map((k) => ({ wch: widths && widths[k] ? widths[k] : Math.min(40, Math.max(12, k.length + 3)) }));
+    if (data.length) ws["!autofilter"] = { ref: ws["!ref"] };
+    XLSX.utils.book_append_sheet(wb, ws, name);
+  };
+  if (property) {
+    const cols = list.map((x, i) => `${x.provider || "Provider"}${list.filter((y) => y.provider === x.provider).length > 1 ? ` (${x.received_date ? ispDate(x.received_date) : i + 1})` : ""}`);
+    const keys = [...RFP_COMPARE, ["retail_rate", "Retail rate"], ["key_points", "Key points"], ["concerns", "Concerns"], ["notes", "Notes"]];
+    const side = keys.map(([k, l]) => {
+      const row = { Term: l };
+      list.forEach((x, i) => { const v = k === "key_points" || k === "concerns" ? (x[k] || []).join("; ") : rfpVal(x, k); row[cols[i]] = v == null ? "" : String(v); });
+      return row;
+    });
+    const ws = XLSX.utils.json_to_sheet(side.length && list.length ? side : [{ Note: "No provider details yet" }]);
+    ws["!cols"] = [{ wch: 22 }, ...cols.map(() => ({ wch: 42 }))];
+    XLSX.utils.book_append_sheet(wb, ws, "Side by Side");
+  }
+  add(list.map((x) => ({
+    "Property Code": x.property_code, Property: byCode[x.property_code] ? byCode[x.property_code].name : "", Provider: x.provider || "",
+    Status: (RFP_STATUS[x.status] || {}).label || x.status || "", Source: RFP_SOURCES[x.source] || x.source || "", "Source Detail": x.source_detail || "",
+    Received: x.received_date || "", Program: x.program_type || "", Services: (x.services || []).join(", "),
+    "Bulk Rate (owner cost)": x.bulk_rate || "", "Bulk $/Unit/Mo": x.bulk_rate_amount != null ? Number(x.bulk_rate_amount) : "",
+    "Term (months)": x.term_months != null ? Number(x.term_months) : "", Term: x.term_text || "", Escalator: x.escalator || "", "Escalator %": x.escalator_pct != null ? Number(x.escalator_pct) : "",
+    "Door Fee": x.door_fee || "", "Door Fee $": x.door_fee_amount != null ? Number(x.door_fee_amount) : "", "Revenue Share": x.rev_share || "", "Retail Rate": x.retail_rate || "",
+    Speeds: x.speeds || "", "Capital / Equipment": x.capex || "", "Install Timeline": x.install_timeline || "", "Common Areas": x.common_area || "",
+    Exclusivity: x.exclusivity || "", Termination: x.termination || "", "Key Points": (x.key_points || []).join("; "), Concerns: (x.concerns || []).join("; "),
+    Notes: x.notes || "", "File": x.file_name || "", "Line Items": (x.line_items || []).length,
+  })), "Providers", { Property: 26, Provider: 20, "Source Detail": 40, "Bulk Rate (owner cost)": 44, Term: 30, "Key Points": 60, Concerns: 60, Notes: 60 });
+  const items = [];
+  list.forEach((x) => (x.line_items || []).forEach((li) => items.push({ "Property Code": x.property_code, Property: byCode[x.property_code] ? byCode[x.property_code].name : "",
+    Provider: x.provider || "", Status: (RFP_STATUS[x.status] || {}).label || x.status || "", Category: li.category || "", Term: li.item || "", Proposed: li.value || "", Where: li.section || "" })));
+  add(items, "Line Items", { Property: 26, Provider: 20, Term: 30, Proposed: 70 });
+  const name = property ? `RFP-Details-${property.code}-${String(property.name).replace(/[^A-Za-z0-9]+/g, "-")}-${TODAY}.xlsx` : `RFP-Details-All-Properties-${TODAY}.xlsx`;
+  XLSX.writeFile(wb, name);
+  return { providers: list.length, items: items.length };
+}
 function RfpStatusPill({ s }) {
   const m = RFP_STATUS[s] || { label: s || "—", bg: "transparent", color: "var(--mut)" };
   return <span className="pill" style={{ background: m.bg, color: m.color }}>{m.label}</span>;
@@ -8911,7 +8961,10 @@ function RfpDetailsModal({ property, proposals, documents, supabaseClient, userE
             <h2 style={{ margin: "2px 0" }}><span className="mono" style={{ opacity: 0.7 }}>{property.code}</span> {property.name}</h2>
             <div style={{ fontSize: 13, opacity: 0.8 }}>Provider terms as they come in, on the RFP template, as a PDF, in an email or on a call.</div>
           </div>
-          <button className="icon-btn" onClick={onClose}><X size={18} /></button>
+          <span style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+            <button className="btn-ghost" onClick={() => exportRfpDetails(proposals, [property], property)} title="Download this property's providers side by side, with every itemized term, as an Excel file">Export to Excel</button>
+            <button className="icon-btn" onClick={onClose}><X size={18} /></button>
+          </span>
         </div>
 
         <div className="section-header">The RFP</div>
