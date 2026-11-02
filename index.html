@@ -7961,14 +7961,14 @@ function IspContractsTable({ rows, byCode, onOpen, showProperty, properties }) {
               <tr key={c.id} className="click" onClick={() => onOpen(c)} style={{ cursor: "pointer" }}>
                 {showProperty && <td title={p ? `${p.code} ${p.name}` : c.property_name_in_contract || ""} style={{ minWidth: 150, maxWidth: 260}}>
                   {p ? <><span className="id">{p.code}</span> {p.name}</> : <span style={{ color: "#d3cdfa" }}>Unpaired{c.property_name_in_contract ? ` · ${c.property_name_in_contract}` : ""}</span>}</td>}
-                <td style={{ fontWeight: 600 }}>{c.provider || (c.status === "done" ? "—" : c.file_name)}</td>
-                <td title={c.agreement_title || ""} style={{ maxWidth: 220}}>{c.agreement_type || c.agreement_title || "—"}</td>
+                <td style={{ fontWeight: 600, minWidth: 110, maxWidth: 200 }}>{c.provider || (c.status === "done" ? "—" : c.file_name)}</td>
+                <td title={c.agreement_title || ""} style={{ minWidth: 100, maxWidth: 220}}>{c.agreement_type || c.agreement_title || "—"}</td>
                 <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.executed_date)}</td>
-                <td style={{ whiteSpace: "nowrap" }}>{ispTerm(c)}</td>
+                <td style={{ minWidth: 70, maxWidth: 170 }}>{ispTerm(c)}</td>
                 <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.expiration_date)}{mo != null && mo >= 0 && mo <= 12 && <span className="t-chip t-old" style={{ marginLeft: 6 }}>{mo} mo</span>}{mo != null && mo < 0 && <span className="t-chip" style={{ marginLeft: 6 }}>Expired</span>}</td>
-                <td title={c.escalator || ""} style={{ maxWidth: 140}}>{c.escalator_pct != null ? `${c.escalator_pct}%` : (c.escalator || "—")}</td>
-                <td title={c.rev_share || ""} style={{ maxWidth: 180}}>{c.rev_share || "—"}</td>
-                <td title={c.door_fee || ""} style={{ maxWidth: 160}}>{ispMoney(c.door_fee_amount) || c.door_fee || "—"}</td>
+                <td title={c.escalator || ""} style={{ minWidth: 90, maxWidth: 180}}>{c.escalator_pct != null ? `${c.escalator_pct}%` : (c.escalator || "—")}</td>
+                <td title={c.rev_share || ""} style={{ minWidth: 90, maxWidth: 200}}>{c.rev_share || "—"}</td>
+                <td title={c.door_fee || ""} style={{ minWidth: 70, maxWidth: 160}}>{ispMoney(c.door_fee_amount) || c.door_fee || "—"}</td>
                 <td>{c.contract_paper || "—"}</td>
                 <td><IspFlag v={c.anti_bulk} label={c.anti_bulk_detail || ""} /></td>
                 <td><IspFlag v={c.exclusive} label={c.exclusivity_detail || ""} /></td>
@@ -7997,11 +7997,11 @@ function IspConsultingTable({ rows, byCode, onOpen, showProperty, properties }) 
             return (
               <tr key={c.id} className="click" onClick={() => onOpen(c)} style={{ cursor: "pointer" }}>
                 {showProperty && <td title={p ? `${p.code} ${p.name}` : ""} style={{ minWidth: 150, maxWidth: 260}}>{p ? <><span className="id">{p.code}</span> {p.name}</> : <span style={{ color: "#d3cdfa" }}>Unpaired{c.property_name_in_contract ? ` · ${c.property_name_in_contract}` : ""}</span>}</td>}
-                <td style={{ fontWeight: 600 }}>{c.consultant || (c.status === "done" ? "—" : c.file_name)}</td>
+                <td style={{ fontWeight: 600, minWidth: 110, maxWidth: 200 }}>{c.consultant || (c.status === "done" ? "—" : c.file_name)}</td>
                 <td title={c.agreement_title || ""} style={{ maxWidth: 200}}>{c.agreement_title || "—"}</td>
                 <td title={c.scope_summary || ""} style={{ maxWidth: 320}}>{c.scope_summary || "—"}</td>
                 <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.executed_date)}</td>
-                <td style={{ whiteSpace: "nowrap" }}>{ispTerm(c)}</td>
+                <td style={{ minWidth: 70, maxWidth: 170 }}>{ispTerm(c)}</td>
                 <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.expiration_date)}{mo != null && mo < 0 && <span className="t-chip" style={{ marginLeft: 6 }}>Expired</span>}{mo != null && mo >= 0 && <span className="t-chip t-old" style={{ marginLeft: 6 }}>Active</span>}</td>
                 <td><IspPairPill c={c} properties={properties || []} /></td>
                 <td><IspStatusPill c={c} /></td>
