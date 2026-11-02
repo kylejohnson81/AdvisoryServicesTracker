@@ -5018,7 +5018,7 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
                 </label>
                 <span className="mono" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   {!st.contracted ? "Not contracted"
-                    : st.auto ? (st.date ? `${fmtDate(st.date)} · contract executed` : "Awaiting execution")
+                    : st.auto ? (st.date ? `Executed ${fmtDate(st.date)}` : "Awaiting execution")
                     : st.done ? (
                       <>
                         <input type="date" className="mono contract-date-input" value={st.date || ""} title={st.by ? `Checked by ${st.by}` : undefined}
