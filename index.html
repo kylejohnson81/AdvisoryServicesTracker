@@ -8774,10 +8774,26 @@ function RfpProposalDetail({ proposal, property, supabaseClient, onClose, onChan
     (p.line_items || []).forEach((li) => { const k = li.category || "Other"; if (!g.has(k)) g.set(k, []); g.get(k).push(li); });
     return [...g.entries()];
   }, [p.line_items]);
+  const attachRef = React.useRef(null);
+  // Attach (or replace) this provider's own proposal file: the PDF / Excel / template it sent.
+  const attach = async (e) => {
+    const f = e.target.files && e.target.files[0]; e.target.value = "";
+    if (!f) return;
+    setBusy(true); setMsg("Uploading…");
+    const path = `rfp/${p.property_code}/proposals/${Date.now()}-${rfpSafeName(f.name)}`;
+    const up = await supabaseClient.storage.from(ISP_BUCKET).upload(path, f, { contentType: f.type || "application/octet-stream", upsert: false });
+    if (up.error) { setBusy(false); setMsg(`Upload failed: ${up.error.message}`); return; }
+    const old = p.file_path;
+    const ok = await save({ file_path: path, file_name: f.name, file_size: f.size });
+    if (ok && old && old !== path) await supabaseClient.storage.from(ISP_BUCKET).remove([old]);
+    setBusy(false);
+    if (ok) setMsg((p.line_items || []).length ? `Attached ${f.name}. Its terms are already itemized; use Itemize again only to re-read them from this file.` : `Attached ${f.name}. Choose Itemize again to fill the terms from it.`);
+  };
   return (
     <div className="modal-overlay">
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 980, width: "96vw", maxHeight: "92vh", overflowY: "auto" }}>
        <div className="proto-dash" style={{ background: "transparent" }}>
+        <input ref={attachRef} type="file" style={{ display: "none" }} onChange={attach} />
         <div className="modal-head">
           <div>
             <div className="field-label" style={{ margin: 0 }}>RFP Details — provider</div>
@@ -8790,6 +8806,7 @@ function RfpProposalDetail({ proposal, property, supabaseClient, onClose, onChan
           <select value={p.status} disabled={busy} onChange={(e) => save({ status: e.target.value })} title="Status">{Object.entries(RFP_STATUS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</select>
           <span style={{ fontSize: 13, opacity: 0.85 }}>{[RFP_SOURCES[p.source] || p.source, p.source_detail, p.received_date && `received ${ispDate(p.received_date)}`].filter(Boolean).join(" · ")}</span>
           {p.file_path && <button className="btn-ghost" onClick={() => rfpOpenFile(supabaseClient, p.file_path).catch((x) => setMsg(`Couldn't open the file: ${x.message}`))}>View proposal</button>}
+          <button className="btn-ghost" disabled={busy} onClick={() => attachRef.current && attachRef.current.click()} title="Attach this provider's proposal file (PDF, Excel or the completed RFP template)">{p.file_path ? "Replace proposal file" : "Attach proposal file"}</button>
           {p.source_text && <button className="btn-ghost" onClick={() => setShowText((v) => !v)}>{showText ? "Hide" : "Show"} email / notes</button>}
           {!edit && <button className="btn-ghost" onClick={startEdit} disabled={busy}>Edit fields</button>}
           <span style={{ flex: 1 }} />
