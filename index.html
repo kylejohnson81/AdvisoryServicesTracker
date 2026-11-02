@@ -8240,6 +8240,8 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
       if (v !== c[k]) patch[k] = v;
     });
     if (!Object.keys(patch).length) { setEdit(false); return; }
+    // Remember which values were set by hand, so a later consolidated RFP never replaces them.
+    patch.extraction = { ...(p.extraction || {}), manual_fields: [...new Set([...((p.extraction || {}).manual_fields || []), ...Object.keys(patch)])] };
     if (await save(patch)) setEdit(false);
   };
   const reread = async () => {
@@ -8651,7 +8653,18 @@ async function rfpExtract(supabaseClient, id) {
   }
   return data && data.proposal;
 }
-async function rfpFillFromDocument(supabaseClient, id, userEmail) {
+async function rfpFillFromDocument(supabaseClient, id, userEmail, property) {
+  // The consolidated RFP template is read directly; anything else is read by Claude.
+  const { data: doc } = await supabaseClient.from("rfp_documents").select("*").eq("id", id).single();
+  if (doc && doc.file_path && /\.(xlsx|xlsm|xls)$/i.test(doc.file_path) && typeof XLSX !== "undefined") {
+    const dl = await supabaseClient.storage.from(ISP_BUCKET).download(doc.file_path);
+    if (dl.error || !dl.data) throw new Error(`Couldn't read the file: ${dl.error ? dl.error.message : "no file"}`);
+    const wb = XLSX.read(new Uint8Array(await dl.data.arrayBuffer()), { type: "array" });
+    let parsed;
+    try { parsed = parseRfpTemplate(wb, property); }
+    catch (x) { await supabaseClient.from("rfp_documents").update({ extract_status: "error", extract_error: x.message }).eq("id", id); throw x; }
+    if (parsed && parsed.providers.length) return rfpApplyTemplate(supabaseClient, doc, parsed, userEmail);
+  }
   const { data, error } = await supabaseClient.functions.invoke("extract-rfp-document", { body: { id, userEmail } });
   if (error) {
     let msg = error.message;
@@ -8661,7 +8674,309 @@ async function rfpFillFromDocument(supabaseClient, id, userEmail) {
   return (data && data.providers) || [];
 }
 const rfpReadable = (name) => /\.(pdf|xlsx|xlsm|xls|csv)$/i.test(String(name || ""));
-const rfpFillSummary = (prov) => !prov || !prov.length ? "No provider terms found in it" : `${prov.filter((x) => x.action === "added").length} provider(s) added, ${prov.filter((x) => x.action === "updated").length} updated: ${prov.map((x) => x.provider).join(", ")}`;
+const rfpFillSummary = (prov) => {
+  if (!prov || !prov.length) return "No provider terms found in it";
+  const n = (a) => prov.filter((x) => x.action === a);
+  const parts = [`${n("added").length} provider(s) added`, `${n("updated").length} updated`];
+  if (n("filled").length) parts.push(`${n("filled").length} filled where blank`);
+  if (n("unchanged").length) parts.push(`${n("unchanged").length} unchanged`);
+  if (n("flagged").length) parts.push(`${n("flagged").length} flagged as missing from this version (${n("flagged").map((x) => x.provider).join(", ")})`);
+  return `${parts.join(", ")}: ${prov.filter((x) => x.action !== "flagged").map((x) => x.provider).join(", ")}`;
+};
+// ---- Consolidated RFP template (ROVR "RFP Financial Analysis" workbook), read directly with no API. ----
+const RFP_NOT_GIVEN = /^(did not stipulate|did not provide|not provided|not stipulated|n\/?a|tbd|none|-+|—|–)$/i;
+const rfpNoVal = (v) => v == null || (typeof v === "string" && (!v.trim() || RFP_NOT_GIVEN.test(v.trim())));
+const rfpNum = (v) => (typeof v === "number" && isFinite(v) ? v : typeof v === "string" && /^\s*\$?-?[\d,]+(\.\d+)?\s*$/.test(v) ? Number(v.replace(/[$,\s]/g, "")) : null);
+const rfpM2 = (n) => `$${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const rfpM0 = (n) => `$${Math.round(Number(n)).toLocaleString("en-US")}`;
+const rfpPct = (n) => { const p = Math.abs(n) <= 1 ? n * 100 : n; return Math.round(p * 100) / 100; };
+const rfpProvKey = (s) => (String(s || "").toLowerCase().replace(/\(.*?\)/g, " ").replace(/[^a-z0-9 ]+/g, " ").trim().split(/\s+/)[0] || "");
+const rfpProvName = (h) => String(h || "").replace(/\(.*?\)/g, " ").replace(/\b(bulk|managed|light|exclusive|retail|marketing|wi-?fi|proposal|option)\b/gi, " ").replace(/\s+/g, " ").trim() || String(h || "").trim();
+const rfpProgOf = (header, title) => {
+  const h = String(header || "").toLowerCase(), t = String(title || "").toLowerCase();
+  if (/bulk\s*managed|managed\s*wi/.test(h)) return "Bulk managed";
+  if (/bulk\s*light/.test(h)) return "Bulk light";
+  if (/retail|marketing/.test(h)) return "Retail / marketing";
+  if (/\bbulk\b/.test(h)) return "Bulk";
+  if (/bulk\s*managed|managed\s*wi/.test(t)) return "Bulk managed";
+  if (/bulk\s*light/.test(t)) return "Bulk light";
+  if (/retail|marketing/.test(t)) return "Retail / marketing";
+  if (/\bbulk\b/.test(t)) return "Bulk";
+  return null;
+};
+const rfpStem = (n) => String(n || "").toLowerCase().replace(/\.[a-z0-9]+$/, "").replace(/\(.*?\)/g, " ").replace(/[^a-z0-9]+/g, "");
+const rfpDateFromName = (n) => {
+  const m = String(n || "").match(/(?:^|\D)(\d{2})(\d{2})(20\d{2})(?:\D|$)/) || null;
+  if (m && +m[1] >= 1 && +m[1] <= 12 && +m[2] >= 1 && +m[2] <= 31) return `${m[3]}-${m[1]}-${m[2]}`;
+  const i = String(n || "").match(/(20\d{2})[-_]?(\d{2})[-_]?(\d{2})(?:\D|$)/);
+  return i && +i[2] >= 1 && +i[2] <= 12 && +i[3] >= 1 && +i[3] <= 31 ? `${i[1]}-${i[2]}-${i[3]}` : null;
+};
+function rfpGrid(ws) {
+  const g = [];
+  if (!ws || !ws["!ref"]) return g;
+  const r = XLSX.utils.decode_range(ws["!ref"]);
+  for (let R = 0; R <= r.e.r; R++) {
+    const row = [];
+    for (let C = 0; C <= r.e.c; C++) { const c = ws[XLSX.utils.encode_cell({ r: R, c: C })]; row[C] = c ? (c.v === "" ? null : c.v) : null; }
+    g.push(row);
+  }
+  return g;
+}
+const rfpCellText = (v) => (v == null ? "" : String(v).trim());
+// Section names for line items.
+const rfpSection = (t) => {
+  const s = String(t).toUpperCase();
+  if (/FINANCING TERMS/.test(s)) return "Financing";
+  if (/PRICING/.test(s)) return "Pricing";
+  if (/NETWORK|EQUIPMENT/.test(s)) return "Network & Equipment";
+  if (/ONBOARD/.test(s)) return "Onboarding";
+  if (/SCOPE/.test(s)) return "Scope of Work";
+  if (/ACCESS POINT/.test(s)) return "Access Points";
+  return String(t).trim();
+};
+// Parses the workbook; returns null when it isn't the consolidated template.
+function parseRfpTemplate(wb, property) {
+  const sheets = wb.SheetNames.map((name) => ({ name, g: rfpGrid(wb.Sheets[name]) }));
+  const findHdr = (g, re) => g.findIndex((row, i) => i < 40 && re.test(rfpCellText(row[1])) && row.slice(2).some((v) => rfpCellText(v)));
+  const props = sheets.filter((s) => /PROPOSAL SUMMARY/i.test(rfpCellText((s.g[0] || [])[1])) && findHdr(s.g, /^(description|field)$/i) >= 0);
+  if (!props.length) return null;
+  const label = (g, re) => { const row = g.find((r, i) => i < 12 && re.test(rfpCellText(r && r[1]))); return row ? rfpCellText(row[2]) : ""; };
+  let sheet = props[0];
+  if (props.length > 1 || property) {
+    const names = property ? [property.name, ...previousNamesOf(property)].map(dupNameTokens).filter((t) => t.length) : [];
+    const score = (s) => {
+      const toks = dupNameTokens(label(s.g, /^property name/i) + " " + s.name);
+      return names.some((t) => t.every((w) => toks.includes(w))) ? 2 : names.some((t) => t.some((w) => w.length > 3 && toks.includes(w))) ? 1 : 0;
+    };
+    const best = props.map((s) => ({ s, k: score(s) })).sort((a, b) => b.k - a.k);
+    if (props.length > 1 && (!best[0].k || (best[1] && best[1].k === best[0].k))) {
+      throw new Error(`This workbook covers ${props.length} properties (${props.map((s) => s.name).join(", ")}) and none clearly matches ${property ? property.name : "this property"}.`);
+    }
+    sheet = best[0].s;
+  }
+  const g = sheet.g, title = rfpCellText(g[0][1]);
+  const hdr = findHdr(g, /^(description|field)$/i);
+  const cols = [];
+  g[hdr].forEach((v, c) => { if (c >= 2 && rfpCellText(v)) cols.push({ c, header: rfpCellText(v) }); });
+  const lastCol = cols.length ? cols[cols.length - 1].c : 2;
+  const out = cols.map(({ c, header }) => ({
+    col: c, header, provider: rfpProvName(header), key: rfpProvKey(header), program_type: rfpProgOf(header, title),
+    f: {}, tiers: [], line_items: [], key_points: [], notes: [],
+  }));
+  const fmt = (lab, v) => {
+    if (typeof v !== "number") return rfpCellText(v);
+    if (/cap on annual|escalat|increase/i.test(lab)) return `${rfpPct(v)}%`;
+    if (/capex|cost|penalty|value|revenue|noi/i.test(lab) && !/per unit\/? ?per month|\/ ?unit ?\/ ?mo|monthly payment/i.test(lab)) return /per unit capex/i.test(lab) ? rfpM2(v) : rfpM0(v);
+    if (/rate|payment|circuit|fee|\$|per mont/i.test(lab)) return rfpM2(v);
+    return String(Math.round(v * 100) / 100);
+  };
+  let section = "";
+  for (let r = hdr + 1; r < g.length; r++) {
+    const row = g[r] || [], lab = rfpCellText(row[1]);
+    if (!lab) continue;
+    const vals = out.map((p) => row[p.col]);
+    if (vals.every((v) => v == null || rfpCellText(v) === "")) { if (/[A-Z]/.test(lab) && lab === lab.toUpperCase()) section = rfpSection(lab); continue; }
+    const extra = row.slice(lastCol + 1).map(rfpCellText).filter(Boolean).join(" ");
+    out.forEach((p, i) => {
+      const v = vals[i];
+      if (v == null || rfpCellText(v) === "") return;
+      const given = !rfpNoVal(v), n = rfpNum(v);
+      const noteHere = extra && (new RegExp(`\\b${p.key}`, "i").test(extra) || out.length === 1) ? extra : "";
+      p.line_items.push({ category: section || "Other", item: lab, value: fmt(lab, v) + (noteHere ? ` (${noteHere})` : ""), section: `${sheet.name} row ${r + 1}` });
+      if (noteHere && !p.notes.includes(noteHere)) p.notes.push(noteHere);
+      if (!given) return;
+      const L = lab.toLowerCase();
+      if (/^term length/.test(L)) {
+        p.f.term_text = rfpCellText(v);
+        const y = rfpCellText(v).match(/(\d+(?:\.\d+)?)\s*(y|yr|year)/i), mo = rfpCellText(v).match(/(\d+)\s*(mo|month)/i);
+        p.f.term_months = y ? Math.round(Number(y[1]) * 12) : mo ? Number(mo[1]) : n != null && n <= 40 ? Math.round(n * 12) : null;
+      } else if (/(per mont|per month rate|\/ ?unit ?\/ ?mo)/.test(L) && section !== "Financing" && !/backup/.test(L)) {
+        if (n != null && n > 0) p.f.bulk_rate_amount = Math.round(n * 100) / 100;
+      } else if (/^(\d+)[- ]?year term/.test(L) && section === "Financing") {
+        if (n != null && n > 0) p.tiers.push({ yrs: Number(L.match(/^(\d+)/)[1]), amt: n });
+      } else if (/^total capex/.test(L)) {
+        p.capexTotal = n != null ? n : null; p.capexText = n != null ? null : rfpCellText(v);
+      } else if (/per unit capex/.test(L)) {
+        if (n != null && n > 0) p.capexUnit = n;
+      } else if (/cap on annual|escalat/.test(L)) {
+        if (n != null) { p.f.escalator_pct = rfpPct(n); p.f.escalator = `Annual bulk rate increases capped at ${rfpPct(n)}%`; } else p.f.escalator = rfpCellText(v);
+      } else if (/termination/.test(L)) {
+        p.f.termination = rfpCellText(v);
+      } else if (/in-unit wired|wired speed/.test(L)) {
+        p.wired = rfpCellText(v);
+      } else if (/wireless spee/.test(L)) {
+        p.wireless = rfpCellText(v);
+      } else if (/waps?:? *indoor/.test(L)) {
+        if (n == null || n > 0) p.wapIn = rfpCellText(v);
+      } else if (/waps?:? *outdoor/.test(L)) {
+        if (n == null || n > 0) p.wapOut = rfpCellText(v);
+      }
+    });
+  }
+  // The "<Name> Fin" sheet: the financial analysis, as line items.
+  const fin = sheets.find((s) => s.name.toLowerCase() === `${sheet.name} fin`.toLowerCase())
+    || sheets.find((s) => s !== sheet && /FINANCIAL/i.test(rfpCellText((s.g[0] || [])[1])) && dupNameTokens(s.name).join(" ").startsWith(dupNameTokens(sheet.name).join(" ")));
+  if (fin) {
+    const fg = fin.g, fh = findHdr(fg, /^metric$/i);
+    if (fh >= 0) {
+      const fcols = [];
+      fg[fh].forEach((v, c) => { if (c >= 2 && rfpCellText(v)) fcols.push({ c, key: rfpProvKey(v) }); });
+      const colFor = (p, i) => (fcols.find((x) => x.key && x.key === p.key) || fcols[i] || {}).c;
+      let block = "", sec = "";
+      for (let r = fh + 1; r < fg.length; r++) {
+        const row = fg[r] || [], lab = rfpCellText(row[1]);
+        if (!lab) continue;
+        if (/^SECTION C/i.test(lab)) sec = "C";
+        else if (/^SECTION/i.test(lab)) { sec = lab.slice(8, 9).toUpperCase(); block = ""; continue; }
+        if (/(\d+)-YEAR FINANCING/i.test(lab)) { block = `${lab.match(/(\d+)-YEAR/i)[1]}-yr financing`; continue; }
+        if (sec === "C") {
+          const who = rfpCellText(row[2]);
+          if (who) out.forEach((p) => { if (p.key && rfpProvKey(who) === p.key) p.key_points.push(`${lab} among the bids in this RFP`); });
+          continue;
+        }
+        if (/gross revenue|internet rate|^total capex|per unit capex|monthly payment|interest rate|office internet/i.test(lab)) continue;
+        out.forEach((p, i) => {
+          const c = colFor(p, i); if (c == null) return;
+          const v = row[c], n = rfpNum(v);
+          if (v == null || rfpNoVal(v) || n === 0) return;
+          p.line_items.push({ category: "Financials", item: block ? `${block}: ${lab}` : lab, value: n != null ? rfpM0(n) : rfpCellText(v), section: `${fin.name} row ${r + 1}` });
+        });
+      }
+    }
+  }
+  out.forEach((p) => {
+    const parts = [];
+    if (p.f.bulk_rate_amount != null) parts.push(`${rfpM2(p.f.bulk_rate_amount)}/unit/mo with no financing`);
+    if (p.tiers.length) parts.push(`100% financed: ${p.tiers.map((t) => `${t.yrs}-yr ${rfpM2(t.amt)}`).join(", ")}`);
+    if (parts.length) p.f.bulk_rate = parts.join("; ") + (p.notes.length ? ` (${p.notes.join("; ")})` : "");
+    if (p.capexTotal != null && p.capexTotal > 0) p.f.capex = `Total capex ${rfpM0(p.capexTotal)}${p.capexUnit ? ` (${rfpM2(p.capexUnit)}/unit)` : ""}`;
+    else if (p.capexText && !rfpNoVal(p.capexText)) p.f.capex = p.capexText;
+    if (p.wired || p.wireless) p.f.speeds = [p.wired && `In-unit wired ${p.wired}`, p.wireless && `wireless ${p.wireless}`].filter(Boolean).join("; ");
+    if (p.wapIn || p.wapOut) p.f.common_area = `Common-area WAPs: ${[p.wapIn && `${p.wapIn} indoor`, p.wapOut && `${p.wapOut} outdoor`].filter(Boolean).join(", ")}`;
+    if (p.program_type === "Bulk managed") p.f.services = ["Internet", "Managed Wi-Fi"];
+    if (p.program_type) p.f.program_type = p.program_type;
+    if (p.header !== p.provider) p.key_points.unshift(`Column heading in the consolidated RFP: "${p.header}"`);
+  });
+  return { sheet: sheet.name, title, providers: out.filter((p) => p.provider) };
+}
+const RFP_TPL_FIELDS = ["program_type", "services", "term_months", "term_text", "bulk_rate", "bulk_rate_amount", "speeds", "escalator", "escalator_pct", "capex", "common_area", "termination"];
+const RFP_TPL_FIGURES = new Set(["bulk_rate", "bulk_rate_amount", "term_months", "term_text", "escalator", "escalator_pct", "capex", "speeds"]);
+const rfpFieldLabel = (k) => ((RFP_EDIT_FIELDS.find((x) => x[0] === k) || [])[1]) || k.replace(/_/g, " ");
+const rfpBlank = (v) => v == null || v === "" || (Array.isArray(v) && !v.length);
+const rfpSame = (a, b) => {
+  if (Array.isArray(a) || Array.isArray(b)) return JSON.stringify([...(a || [])].sort()) === JSON.stringify([...(b || [])].sort());
+  if (a == null || b == null) return a == null && b == null;
+  const na = Number(a), nb = Number(b);
+  if (String(a).trim() !== "" && String(b).trim() !== "" && !isNaN(na) && !isNaN(nb)) return na === nb;
+  return String(a) === String(b);
+};
+const rfpShow = (v) => (Array.isArray(v) ? v.join(", ") : String(v));
+const rfpProgOk = (a, b) => !a || !b || a === "Other" || b === "Other" || a === b;
+// Writes a parsed consolidated RFP into rfp_proposals. A newer consolidated RFP replaces the figures an
+// earlier one wrote (the earlier values go in a dated note); values someone edited by hand are never
+// replaced; entries from other sources are only filled where blank; providers missing from the newer
+// version are flagged, never deleted.
+async function rfpApplyTemplate(supabaseClient, doc, parsed, userEmail) {
+  const { data: rows, error } = await supabaseClient.from("rfp_proposals").select("*").eq("property_code", doc.property_code);
+  if (error) throw new Error(error.message);
+  const docDate = doc.sent_date || rfpDateFromName(doc.file_name || doc.title) || null;
+  const label = `${doc.title || doc.file_name || "consolidated RFP"}${docDate ? `, ${ispDate(docDate)}` : ""}`;
+  const stem = rfpStem(doc.file_name || doc.title);
+  const used = new Set(), results = [];
+  const ex = (r) => r.extraction || {};
+  const latest = rows.map((r) => ex(r).template_doc_date).filter(Boolean).sort().pop() || null;
+  const isOlder = !!(docDate && latest && docDate < latest);
+  const fromThis = (r) => ex(r).rfp_document_id === doc.id || (stem && (rfpStem(r.file_name) === stem));
+  const fromOtherConsolidated = (r) => ex(r).template && ex(r).rfp_document_id !== doc.id;
+  for (const p of parsed.providers) {
+    const same = (r) => !used.has(r.id) && rfpProvKey(r.provider) === p.key;
+    let row = rows.find((r) => same(r) && fromThis(r))
+      || rows.find((r) => same(r) && fromOtherConsolidated(r) && rfpProgOk(r.program_type, p.program_type))
+      || rows.find((r) => same(r) && !r.file_path && !r.file_name && !ex(r).template && rfpProgOk(r.program_type, p.program_type) && !["declined", "not_pursued"].includes(r.status));
+    const tplItems = p.line_items;
+    const meta = { template: true, rfp_document_id: doc.id, template_doc_date: docDate, template_sheet: parsed.sheet, template_column: p.header, template_key_points: p.key_points };
+    if (!row) {
+      const ins = await supabaseClient.from("rfp_proposals").insert([{ property_code: doc.property_code, provider: p.provider, status: "received", source: "rfp_template",
+        source_detail: `Consolidated RFP: ${label}`, received_date: docDate, ...p.f, line_items: tplItems, key_points: p.key_points,
+        notes: `Read from the consolidated RFP (${label}) on ${ispDate(TODAY)}.`, created_by: "RFP document", extraction: meta, extract_status: "done", model: "template" }]).select().single();
+      if (ins.error) throw new Error(ins.error.message);
+      used.add(ins.data.id); results.push({ provider: p.provider, action: "added", id: ins.data.id }); continue;
+    }
+    used.add(row.id);
+    const manual = new Set(ex(row).manual_fields || []);
+    const prevDate = ex(row).template_doc_date;
+    if (prevDate && docDate && docDate < prevDate) { results.push({ provider: row.provider, action: "unchanged", id: row.id, note: "a newer consolidated RFP already set these terms" }); continue; }
+    const supersede = (fromThis(row) || fromOtherConsolidated(row)) && !(prevDate && docDate && docDate < prevDate) && !/@/.test(String(row.created_by || ""));
+    // Entries an earlier template read wrote are replaced in full; entries read from this same workbook some
+    // other way (a PDF of it, or the digest) get its figures, and their other wording is only filled where blank.
+    const full = !!ex(row).template;
+    const patch = {}, prev = [];
+    RFP_TPL_FIELDS.forEach((k) => {
+      const nv = p.f[k];
+      if (manual.has(k)) return;
+      if (supersede && (full || RFP_TPL_FIGURES.has(k))) {
+        if (nv === undefined && rfpBlank(row[k])) return;
+        const v = nv === undefined ? null : nv;
+        if (rfpSame(row[k], v) || (rfpBlank(row[k]) && rfpBlank(v))) return;
+        if (!rfpBlank(row[k])) prev.push(`${rfpFieldLabel(k)}: ${rfpShow(row[k])}`);
+        patch[k] = v;
+      } else if (nv !== undefined && rfpBlank(row[k])) patch[k] = nv;
+    });
+    const replaceItems = supersede && (full || /forwarded PDF|RFP document/i.test(String(row.created_by || "")));
+    if (supersede) {
+      const oldItems = row.line_items || [];
+      if (replaceItems) { if (JSON.stringify(oldItems) !== JSON.stringify(tplItems)) patch.line_items = tplItems; }
+      else {
+        const have = new Set(oldItems.map((li) => `${String(li.item).toLowerCase()}|${String(li.value).toLowerCase()}`));
+        const add = tplItems.filter((li) => !have.has(`${String(li.item).toLowerCase()}|${String(li.value).toLowerCase()}`));
+        if (add.length) patch.line_items = [...oldItems, ...add];
+      }
+      const oldTplKp = new Set(ex(row).template_key_points || []);
+      const kp = [...(row.key_points || []).filter((x) => !oldTplKp.has(x) && !/^Column heading in the consolidated RFP/.test(x)), ...p.key_points.filter((x) => !(row.key_points || []).includes(x) || oldTplKp.has(x))];
+      if (JSON.stringify(kp) !== JSON.stringify(row.key_points || [])) patch.key_points = kp;
+      if (docDate && !manual.has("received_date") && row.received_date !== docDate) patch.received_date = docDate;
+    } else {
+      const have = new Set((row.line_items || []).map((li) => `${String(li.item).toLowerCase()}|${String(li.value).toLowerCase()}`));
+      const add = tplItems.filter((li) => !have.has(`${String(li.item).toLowerCase()}|${String(li.value).toLowerCase()}`));
+      if (add.length) patch.line_items = [...(row.line_items || []), ...add];
+      if (!(row.key_points || []).length && p.key_points.length) patch.key_points = p.key_points;
+      if (!row.received_date && docDate) patch.received_date = docDate;
+    }
+    const conc = (row.concerns || []).filter((c) => !/^Not in the latest consolidated RFP/.test(c));
+    if (!isOlder && conc.length !== (row.concerns || []).length) patch.concerns = conc;
+    if (row.status === "requested") patch.status = "received";
+    if (!row.source) patch.source = "rfp_template";
+    const changed = Object.keys(patch).filter((k) => k !== "concerns");
+    if (supersede && changed.length) {
+      const kept = [...manual].filter((k) => p.f[k] !== undefined && !rfpSame(row[k], p.f[k])).map(rfpFieldLabel);
+      patch.notes = `${row.notes ? row.notes + "\n\n" : ""}${ispDate(TODAY)}: ${prev.length || patch.line_items || Object.keys(patch).some((k) => RFP_TPL_FIELDS.includes(k)) ? "updated from" : "unchanged in"} the consolidated RFP (${label}).${prev.length ? ` Previously: ${prev.join("; ")}.` : ""}${patch.line_items ? (replaceItems ? " Line items replaced with this version's." : " This version's line items added.") : ""}${kept.length ? ` Kept your edits to ${kept.join(", ")}.` : ""}`;
+    } else if (!supersede && changed.length) {
+      patch.notes = `${row.notes ? row.notes + "\n\n" : ""}${ispDate(TODAY)}: blanks filled from the consolidated RFP (${label}).`;
+    }
+    if (!Object.keys(patch).length) { results.push({ provider: row.provider, action: "unchanged", id: row.id }); continue; }
+    patch.extraction = supersede ? { ...ex(row), ...meta } : { ...ex(row), filled_from_document_ids: [...new Set([...(ex(row).filled_from_document_ids || []), doc.id])] };
+    patch.extract_status = "done"; patch.extract_error = null;
+    const up = await supabaseClient.from("rfp_proposals").update(patch).eq("id", row.id);
+    if (up.error) throw new Error(up.error.message);
+    results.push({ provider: row.provider, action: supersede ? "updated" : "filled", id: row.id });
+  }
+  // Providers an earlier consolidated RFP had that this one doesn't.
+  for (const r of rows) {
+    if (isOlder) break;
+    if (used.has(r.id) || !ex(r).template || ex(r).rfp_document_id === doc.id) continue;
+    if (ex(r).template_doc_date && docDate && docDate < ex(r).template_doc_date) continue;
+    if (parsed.providers.some((p) => p.key === rfpProvKey(r.provider))) continue;
+    const flag = `Not in the latest consolidated RFP (${label})`;
+    if ((r.concerns || []).includes(flag)) continue;
+    const up = await supabaseClient.from("rfp_proposals").update({ concerns: [...(r.concerns || []).filter((c) => !/^Not in the latest consolidated RFP/.test(c)), flag] }).eq("id", r.id);
+    if (up.error) throw new Error(up.error.message);
+    results.push({ provider: r.provider, action: "flagged", id: r.id });
+  }
+  await supabaseClient.from("rfp_documents").update({ extract_status: "done", extract_error: null, extracted_at: new Date().toISOString(),
+    providers: results.map((x) => ({ ...x, method: "template" })) }).eq("id", doc.id);
+  return results;
+}
+
 const rfpSafeName = (n) => String(n || "file").replace(/[^A-Za-z0-9._-]+/g, "_");
 
 // Add provider details: a PDF (read by Claude), pasted email text, or typed terms.
@@ -8752,6 +9067,8 @@ function RfpProposalDetail({ proposal, property, supabaseClient, onClose, onChan
     const patch = {};
     RFP_EDIT_FIELDS.forEach(([k, , t]) => { let v = draft[k]; if (t === "number") v = v === "" || v == null ? null : Number(v); else v = v === "" ? null : v; if (v !== p[k]) patch[k] = v; });
     if (!Object.keys(patch).length) { setEdit(false); return; }
+    // Remember which values were set by hand, so a later consolidated RFP never replaces them.
+    patch.extraction = { ...(p.extraction || {}), manual_fields: [...new Set([...((p.extraction || {}).manual_fields || []), ...Object.keys(patch)])] };
     if (await save(patch)) setEdit(false);
   };
   const reread = async () => {
@@ -8896,8 +9213,8 @@ function RfpDocuments({ property, docs, supabaseClient, userEmail, onChanged }) 
   const [fill, setFill] = useState(true);
   const [filling, setFilling] = useState(null);
   const runFill = async (docId) => {
-    setFilling(docId); setMsg("Reading provider details from the document with Claude… (about a minute)");
-    try { const prov = await rfpFillFromDocument(supabaseClient, docId, userEmail); setMsg(rfpFillSummary(prov) + "."); }
+    setFilling(docId); setMsg("Reading provider details from the document… (the consolidated RFP template is read directly in seconds; other files take about a minute with Claude)");
+    try { const prov = await rfpFillFromDocument(supabaseClient, docId, userEmail, property); setMsg(rfpFillSummary(prov) + "."); }
     catch (x) { setMsg(`Couldn't fill provider details: ${x.message}`); }
     setFilling(null); if (onChanged) onChanged();
   };
@@ -8952,7 +9269,7 @@ function RfpDocuments({ property, docs, supabaseClient, userEmail, onChanged }) 
         <span style={{ fontSize: 12.5, opacity: 0.7 }}>or</span>
         <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="Paste a SharePoint / OneDrive link" style={{ minWidth: 240 }} />
         <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}>Sent <input type="date" value={sent} onChange={(e) => setSent(e.target.value)} /></label>
-        <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }} title="Reads each provider's terms from an uploaded PDF or Excel file into the table below (uses the API)"><input type="checkbox" checked={fill} onChange={(e) => setFill(e.target.checked)} /> Fill provider details from it</label>
+        <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }} title="Reads each provider's terms into the table below. The consolidated RFP template is read directly; a newer version replaces an older one's figures (the previous values are kept in a note) but never your edits. Other PDF / Excel files are read by Claude (uses the API) and only fill blanks."><input type="checkbox" checked={fill} onChange={(e) => setFill(e.target.checked)} /> Fill provider details from it</label>
         <button className="btn-ghost" onClick={add} disabled={busy || !!filling}>Add</button>
         {msg && <span style={{ fontSize: 13, color: /couldn|fail|choose/i.test(msg) ? "#ff8f86" : undefined }}>{msg}</span>}
       </div>
@@ -9079,7 +9396,7 @@ function RfpBulkUpload({ properties, supabaseClient, userEmail }) {
         setRow(i, { state: `Added to ${r.code}`, ok: true });
         if (fill && rfpReadable(r.file.name) && ins.data && ins.data[0]) {
           setRow(i, { state: `Added to ${r.code}; reading provider details…` });
-          try { const prov = await rfpFillFromDocument(supabaseClient, ins.data[0].id, userEmail); setRow(i, { state: `Added to ${r.code}. ${rfpFillSummary(prov)}` }); }
+          try { const prov = await rfpFillFromDocument(supabaseClient, ins.data[0].id, userEmail, properties.find((p) => p.code === r.code)); setRow(i, { state: `Added to ${r.code}. ${rfpFillSummary(prov)}` }); }
           catch (x) { setRow(i, { state: `Added to ${r.code}, but provider details couldn't be read: ${x.message}`, err: true }); }
         }
       } catch (x) { setRow(i, { state: x.message || String(x), err: true }); }
@@ -9091,14 +9408,14 @@ function RfpBulkUpload({ properties, supabaseClient, userEmail }) {
   return (
     <div>
       <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>
-        Select one or more RFP files (PDF, Word, Excel). Each is paired to a property from its file name (P-code, property name or a former name); check the pairing, choose RFP or Consolidated RFP, and upload. They show under View RFP and in RFP Details on each property. Where a PDF or Excel file has provider responses (a consolidated RFP or a completed template), each provider's terms are filled into RFP Details: new providers are added, and existing ones are only filled where blank.
+        Select one or more RFP files (PDF, Word, Excel). Each is paired to a property from its file name (P-code, property name or a former name); check the pairing, choose RFP or Consolidated RFP, and upload. They show under View RFP and in RFP Details on each property. Where a file has provider responses, each provider's terms are filled into RFP Details. The consolidated RFP template is read directly: a newer version replaces the figures an earlier one wrote (the earlier values are kept in a dated note), values you edited by hand are never replaced, and providers missing from the newer version are flagged. Other PDF or Excel files are read by Claude and only fill blanks.
       </div>
       <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={onFiles} />
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <button className="btn-ghost" onClick={() => fileRef.current && fileRef.current.click()} disabled={busy}>Choose files</button>
         {rows.length > 0 && <button className="btn-primary" onClick={upload} disabled={busy || !pending.length || unpaired === pending.length}>Upload {pending.length - unpaired} file{pending.length - unpaired === 1 ? "" : "s"}</button>}
         {unpaired > 0 && <span style={{ fontSize: 12.5, color: "#ffd98a", alignSelf: "center" }}>{unpaired} need a property</span>}
-        <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={fill} disabled={busy} onChange={(e) => setFill(e.target.checked)} /> Fill provider details from PDF / Excel files (uses the API)</label>
+        <label style={{ fontSize: 12.5, display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" checked={fill} disabled={busy} onChange={(e) => setFill(e.target.checked)} /> Fill provider details from PDF / Excel files</label>
       </div>
       {rows.length > 0 && (
         <div className="contract-dates-list">
