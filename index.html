@@ -11757,7 +11757,6 @@ function App() {
               ["properties", "Client", Table2, "#a79cf0"],
               ["billing", "Billing", FileText, "#f4b45a"],
               ["contracts", "Advisory Contracts", FileText, "#3cc8c0"],
-              ["isp", "ISP Contracts", FileText, "#e88f5f"],
               ["map", "Client Map", MapIcon, "#5fb3f0"],
             ].map(([key, label, Icon, color]) => (
               <button key={key} className={view === key ? "active" : ""} style={{ "--hc": color }} onClick={() => { if (key === "billing") setBillingStatus("all"); setView(key); }} aria-current={view === key ? "page" : undefined}>
