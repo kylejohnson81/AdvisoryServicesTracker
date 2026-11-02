@@ -8900,6 +8900,9 @@ async function rfpApplyTemplate(supabaseClient, doc, parsed, userEmail) {
     const tplItems = p.line_items;
     const meta = { template: true, rfp_document_id: doc.id, template_doc_date: docDate, template_sheet: parsed.sheet, template_column: p.header, template_key_points: p.key_points };
     if (!row) {
+      // A newer proposal from this provider is already on file (e.g. its own offer after this version): don't add an older duplicate.
+      const newer = rows.find((r) => rfpProvKey(r.provider) === p.key && r.received_date && docDate && r.received_date > docDate);
+      if (newer) { results.push({ provider: newer.provider, action: "unchanged", id: newer.id, note: `a newer ${newer.provider} proposal (${ispDate(newer.received_date)}) is on file` }); continue; }
       const ins = await supabaseClient.from("rfp_proposals").insert([{ property_code: doc.property_code, provider: p.provider, status: "received", source: "rfp_template",
         source_detail: `Consolidated RFP: ${label}`, received_date: docDate, ...p.f, line_items: tplItems, key_points: p.key_points,
         notes: `Read from the consolidated RFP (${label}) on ${ispDate(TODAY)}.`, created_by: "RFP document", extraction: meta, extract_status: "done", model: "template" }]).select().single();
