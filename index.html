@@ -2485,7 +2485,7 @@ const BILLING_PHASE_META = {
    it moves on by itself as months turn over.
 --------------------------------------------------------- */
 const RT_STATE_KEY = "revenueTrackerImport";
-const RT_DEFAULT_SETTINGS = { rovrRate: 0.6, rovrBucket: "RFP Services", gateRovrPaidOnPaymentDate: false, statusFilter: "Invoiced" };
+const RT_DEFAULT_SETTINGS = { rovrRate: 0.6, rovrBucket: "RFP Services", gateRovrPaidOnPaymentDate: false, importRule: "invoiceDate" };
 const RT_CRITICAL_HEADERS = { A: "engagement id", G: "service bucket", I: "status", P: "invoice amount", T: "estimated ap cost", V: "invoice date", W: "paid date" };
 const RT_TABS = [
   { key: "rfp", bucket: "rfp services", label: "RFP Track" },
@@ -2589,12 +2589,13 @@ function rtParseRows(rows, opts) {
 // statusFilter setting are imported (case-insensitive, trimmed). A blank
 // setting imports every row. Skipped rows are counted by status, and any
 // skipped row that already carries an Invoice Date is listed by name.
+// Import rule: every row with an Invoice Date (column V) is invoiced, whatever its Status says.
+// Rows with no Invoice Date are skipped: what's still to bill comes from Advisory Contracts
+// (contracted fees less what's invoiced), so those rows would double count it.
 function rtApplyStatusFilter(records, settings) {
-  const want = String(({ ...RT_DEFAULT_SETTINGS, ...(settings || {}) }).statusFilter || "").trim().toLowerCase();
-  if (!want) return { records, skippedByStatus: {}, skippedCount: 0, skippedWithInvoiceDate: [] };
   const kept = [], skippedByStatus = {}, skippedWithInvoiceDate = [];
   records.forEach((r) => {
-    if (String(r.tracker_status || "").trim().toLowerCase() === want) { kept.push(r); return; }
+    if (r.invoice_date) { kept.push(r); return; }
     const k = r.tracker_status || "(blank)";
     skippedByStatus[k] = (skippedByStatus[k] || 0) + 1;
     if (r.invoice_date) skippedWithInvoiceDate.push(r);
@@ -2650,13 +2651,14 @@ function rtTotals(evaluated) {
   const t = { rows: evaluated.length, invoiced: 0, rovr_pending: 0, rovr_paid: 0, paid: 0, current: 0, past_due: 0, not_invoiced: 0, past_due_rows: 0, warning_rows: 0 };
   const props = new Set();
   evaluated.forEach((r) => {
+    if (r.synthetic) { t.not_invoiced += r.invoiced; t.rows--; props.add(`p${r._p.id}`); return; }
     t.invoiced += r.invoiced; t.rovr_pending += r.rovr_pending; t.rovr_paid += r.rovr_paid;
     if (r.payment_status === "Paid") t.paid += r.invoiced;
     else if (r.payment_status === "Current") t.current += r.invoiced;
     else if (r.payment_status === "Past due") { t.past_due += r.invoiced; t.past_due_rows++; }
     else t.not_invoiced += r.invoiced;
     if (r.warnings && r.warnings.length) t.warning_rows++;
-    props.add(rtBaseId(r.engagement_id));
+    props.add(r._p ? `p${r._p.id}` : rtBaseId(r.engagement_id));
   });
   Object.keys(t).forEach((k) => { if (typeof t[k] === "number" && !/rows$/.test(k)) t[k] = rtRound2(t[k]); });
   t.properties = props.size;
@@ -2735,6 +2737,48 @@ function rtSplitByContract(evaluated, properties) {
   return { contracted, excluded };
 }
 
+// Pending = what Advisory Contracts says is still to bill: for each executed (not Closed) property,
+// each contracted one-time fee (the same fees as One-time fees on Overview: DD/RFP in the RFP
+// Services bucket, Program Design in its own) less what the Revenue Tracker has invoiced for that
+// bucket (paid or not). Returned as one synthetic line per property and bucket, so every billing
+// total adds up: contract total = paid + invoiced + overdue + pending.
+// Deployment is billed monthly from go-live, so it isn't part of Pending.
+function rtContractPendingLines(properties, contractedLines) {
+  const match = rtPropertyMatcher(properties);
+  const billed = new Map();
+  (contractedLines || []).forEach((r) => {
+    if (r.synthetic) return;
+    const p = r._p || match(r); if (!p) return;
+    const k = `${p.id}|${String(r.service_bucket || "").trim().toLowerCase()}`;
+    billed.set(k, (billed.get(k) || 0) + (r.invoiced || 0));
+  });
+  const out = [];
+  (properties || []).forEach((p) => {
+    const prog = p.program || {};
+    if (!prog.advisoryContractExecuted || prog.manualStatus === "Closed") return;
+    const opts = prog.selectedOptions || {};
+    let b = null; try { b = computeAdvisoryBilling(p); } catch (e) { return; }
+    const pt = (prog.attributes || {})["Project Type"] || "Retrofit";
+    const parts = [];
+    let rfpFee = 0, rfpRovr = 0;
+    if (opts.dueDiligence && b.dueDiligence && !b.dueDiligence.credited) { rfpFee += b.dueDiligence.total; rfpRovr += b.dueDiligence.total * rovrPercentForProjectType(pt, "dueDiligence"); }
+    if (opts.rfp && b.rfp && !b.rfp.credited) { rfpFee += b.rfp.total; rfpRovr += b.rfp.total * rovrPercentForProjectType(pt, "rfp"); }
+    if (rfpFee > 0) parts.push({ bucket: "RFP Services", fee: rfpFee, rovrPct: rfpRovr / rfpFee });
+    if (opts.programDesign && b.programDesign && b.programDesign.total > 0) parts.push({ bucket: "Program Design / Contract Oversight", fee: b.programDesign.total, rovrPct: rovrPercentForProjectType(pt, "programDesign") });
+    parts.forEach((x) => {
+      const inv = billed.get(`${p.id}|${x.bucket.toLowerCase()}`) || 0;
+      const left = rtRound2(Math.max(0, x.fee - inv));
+      if (left <= 0) return;
+      out.push({ synthetic: true, _p: p, source_row: `pending-${p.id}-${x.bucket}`, engagement_id: "", client_owner: (prog.attributes || {}).Client || "", property: p.name,
+        yardi_code: null, service_bucket: x.bucket, billing_milestone: inv > 0 ? "Rest of contracted fee" : "Contracted fee", tracker_status: "", invoice_number: null,
+        invoice_date: null, paid_date: null, rovr_payment_date: null, invoiced: left, rovr_pending: 0, rovr_share: rtRound2(left * x.rovrPct), rovr_paid: 0,
+        payment_status: "Not invoiced", past_due: false, past_due_amount: 0, days_past_due: 0, paid: 0, outstanding: left, amount_collected: null,
+        contract_fee: x.fee, already_invoiced: inv, warnings: [] });
+    });
+  });
+  return out;
+}
+
 // Lists Revenue Tracker lines left out of billing because Advisory Contracts doesn't cover them.
 function RtExcludedPanel({ excluded, onOpenProperty }) {
   const [open, setOpen] = useState(false);
@@ -2783,7 +2827,7 @@ const RT_CHECK_META = {
   noContract: { sev: "error", title: "Billed, but no executed advisory contract" },
   serviceNotContracted: { sev: "error", title: "Service billed that isn't on the contract" },
   billedBeforeExecution: { sev: "warn", title: "Invoiced before the contract was executed" },
-  feeMismatch: { sev: "warn", title: "Billed amount differs from the contracted fee" },
+  feeMismatch: { sev: "warn", title: "Invoiced more than the contracted fee" },
   closedUnpaid: { sev: "warn", title: "Closed property with unpaid billing" },
   contractNotBilled: { sev: "info", title: "Executed contract with no billing lines" },
   serviceNotBilled: { sev: "info", title: "Contracted service with no billing lines" },
@@ -2825,7 +2869,8 @@ function rtContractChecks(evaluated, properties) {
       if (executed && !svc.keys.some((k) => opts[k])) add("serviceNotContracted", `${svc.label} billed (${rtMoney(billed)}) but ${svc.label} isn't a selected service on the contract.`, p, bl);
       if (svc.feeKey && billing && billing[svc.feeKey] && !billing[svc.feeKey].credited && Number.isFinite(billing[svc.feeKey].total) && svc.keys.some((k) => opts[k])) {
         const fee = billing[svc.feeKey].total;
-        if (Math.abs(fee - billed) > 1) add("feeMismatch", `${svc.label}: Revenue Tracker bills ${rtMoney(billed)} across ${bl.length} line${bl.length === 1 ? "" : "s"}; the contract fee is ${rtMoney(fee)} (difference ${rtMoney(billed - fee)}).`, p, bl);
+        // Billing less than the fee is normal (the rest is Pending); only billing more than the fee is flagged.
+        if (billed - fee > 1) add("feeMismatch", `${svc.label}: Revenue Tracker has invoiced ${rtMoney(billed)} across ${bl.length} line${bl.length === 1 ? "" : "s"}; the contract fee is ${rtMoney(fee)} (${rtMoney(billed - fee)} over).`, p, bl);
       }
     });
     if (executed) {
@@ -2953,21 +2998,20 @@ function RevenueImportModal({ onClose, onSave, previous, properties }) {
               <div className="attr-edit-item"><label>ROVR paid only once ROVR Payment Date is filled</label>
                 <select value={settings.gateRovrPaidOnPaymentDate ? "yes" : "no"} onChange={(e) => setSettings((s) => ({ ...s, gateRovrPaidOnPaymentDate: e.target.value === "yes" }))}><option value="no">No (default)</option><option value="yes">Yes</option></select>
               </div>
-              <div className="attr-edit-item"><label>Import only Status (column I) =</label><input type="text" placeholder="blank imports all rows" value={settings.statusFilter == null ? "" : settings.statusFilter} onChange={(e) => setSettings((s) => ({ ...s, statusFilter: e.target.value }))} /></div>
             </div>
             <div className="contract-dates-list">
               {row("Rows in file (with an Engagement ID)", parsed.records.length)}
-              {row("Rows imported", `${t.rows}${String(settings.statusFilter || "").trim() ? ` (Status = ${String(settings.statusFilter).trim()})` : " (all statuses)"}`)}
-              {filtered.skippedCount > 0 && row("Rows skipped", `${filtered.skippedCount} (${Object.entries(filtered.skippedByStatus).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${k}`).join(", ")})`)}
+              {row("Rows imported", `${t.rows} (every row with an Invoice Date, any status)`)}
+              {filtered.skippedCount > 0 && row("Rows skipped (no Invoice Date)", `${filtered.skippedCount} (${Object.entries(filtered.skippedByStatus).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${n} ${k}`).join(", ")}); what's left to bill comes from Advisory Contracts`)}
               {row("Properties", t.properties)}
               {row("Invoiced (P)", rtMoney2(t.invoiced))}
               {row("ROVR pending (T)", rtMoney2(t.rovr_pending))}
               {row("ROVR paid", rtMoney2(t.rovr_paid))}
-              {row("Paid / Invoiced / Overdue / Pending", `${rtMoney(t.paid)} / ${rtMoney(t.current)} / ${rtMoney(t.past_due)} / ${rtMoney(t.not_invoiced)}`)}
+              {row("Paid / Invoiced / Overdue", `${rtMoney(t.paid)} / ${rtMoney(t.current)} / ${rtMoney(t.past_due)}`)}
               {row("Past due", `${t.past_due_rows} rows · ${rtMoney2(t.past_due)}`)}
               {row("Rows with warnings", t.warning_rows)}
             </div>
-            {filtered.skippedWithInvoiceDate.length > 0 && (
+            {false && filtered.skippedWithInvoiceDate.length > 0 && (
               <div style={{ marginTop: 10, border: "1px solid #B8892B", background: "rgba(184,137,43,0.12)", borderRadius: 6, padding: 10, fontSize: 12.5 }}>
                 <b>Skipped by Status but already carry an Invoice Date</b>
                 <ul style={{ margin: "4px 0 0", paddingLeft: 18 }}>{filtered.skippedWithInvoiceDate.map((r) => <li key={r.source_row}>Row {r.source_row} · {r.engagement_id} · {r.billing_milestone} · Status "{r.tracker_status || "(blank)"}" · invoiced {fmtDate(r.invoice_date)}{r.paid_date ? `, paid ${fmtDate(r.paid_date)}` : ", unpaid"} · {rtMoney2(r.invoiced)}</li>)}</ul>
@@ -3014,12 +3058,16 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
   const [showWarnings, setShowWarnings] = useState(false);
   const imp = billingImport && Array.isArray(billingImport.records) ? billingImport : null;
 
-  const evaluatedAll = useMemo(() => imp ? imp.records.map((r) => rtEvaluate(r, asOf || TODAY, imp.settings)) : [], [imp, asOf]);
+  // Invoiced = every Revenue Tracker line with an invoice date (any status).
+  const evaluatedAll = useMemo(() => imp ? imp.records.filter((r) => r.invoice_date).map((r) => rtEvaluate(r, asOf || TODAY, imp.settings)) : [], [imp, asOf]);
   // Advisory Contracts guides billing: only lines for an executed, contracted service count.
   const split = useMemo(() => rtSplitByContract(evaluatedAll, allProperties || properties), [evaluatedAll, allProperties, properties]);
-  const evaluated = split.contracted;
+  // Pending = contracted fees not yet invoiced (Advisory Contracts), as one line per property and service.
+  const pendingLines = useMemo(() => rtContractPendingLines(allProperties || properties, split.contracted), [split, allProperties, properties]);
+  const evaluated = useMemo(() => [...split.contracted, ...pendingLines], [split, pendingLines]);
   // Link billing rows to tracker properties by Yardi code, then by name.
-  const findProperty = useMemo(() => rtPropertyMatcher(allProperties || properties), [allProperties, properties]);
+  const matchProperty = useMemo(() => rtPropertyMatcher(allProperties || properties), [allProperties, properties]);
+  const findProperty = useMemo(() => (r) => r._p || matchProperty(r), [matchProperty]);
   const checks = useMemo(() => rtContractChecks(evaluatedAll, allProperties || properties), [evaluatedAll, allProperties, properties]);
 
   const tabDef = RT_TABS.find((x) => x.key === tab);
@@ -3038,11 +3086,12 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
     scoped.forEach((r) => {
       const tracker = findProperty(r);
       const k = tracker ? `p${tracker.id}` : rtBaseId(r.engagement_id);
-      if (!m.has(k)) m.set(k, { key: k, tracker, property: tracker ? tracker.name : r.property, client: r.client_owner, engagements: [], lines: [], total: 0, paid: 0, outstanding: 0, rovr_paid: 0, rovr_pending: 0, maxDays: 0 });
+      if (!m.has(k)) m.set(k, { key: k, tracker, property: tracker ? tracker.name : r.property, client: r.client_owner, engagements: [], lines: [], total: 0, invoicedOnly: 0, pending: 0, paid: 0, outstanding: 0, rovr_paid: 0, rovr_pending: 0, maxDays: 0 });
       const e = m.get(k);
       const eid = rtBaseId(r.engagement_id);
       if (eid && !e.engagements.includes(eid)) e.engagements.push(eid);
       e.lines.push(r); e.total += r.invoiced; e.paid += r.paid; e.outstanding += r.outstanding; e.rovr_paid += r.rovr_paid; e.rovr_pending += r.rovr_pending;
+      if (r.synthetic) e.pending += r.invoiced; else e.invoicedOnly += r.invoiced;
       if (r.days_past_due > e.maxDays) e.maxDays = r.days_past_due;
     });
     return [...m.values()].map((e) => {
@@ -3085,7 +3134,7 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
       <div className="wrap">
         <h1>Billing</h1>
         <p className="sub">
-          {imp ? <>From the Revenue Tracker import: <b>{imp.source_file || "Revenue Tracker"}</b>, imported {imp.imported_at ? fmtDate(imp.imported_at.slice(0, 10)) : "—"}{imp.imported_by ? ` by ${imp.imported_by}` : ""}. Status comes from the invoice and paid dates.</> : "No Revenue Tracker has been imported yet. Import it from Import in the header."}
+          {imp ? <>Invoiced from the Revenue Tracker import: <b>{imp.source_file || "Revenue Tracker"}</b>, imported {imp.imported_at ? fmtDate(imp.imported_at.slice(0, 10)) : "—"}{imp.imported_by ? ` by ${imp.imported_by}` : ""} (every line with an invoice date; status comes from the invoice and paid dates). Pending is what Advisory Contracts has executed, less what's invoiced.</> : "No Revenue Tracker has been imported yet. Import it from Import in the header."}
         </p>
         <div className="toolbar" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           {imp && <label style={{ display: "flex", gap: 6, alignItems: "center", color: "var(--mut)", fontSize: 13 }}>As of <input type="date" value={asOf} onChange={(e) => setAsOf(e.target.value || TODAY)} /></label>}
@@ -3102,16 +3151,16 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
               <div className="kpis">
                 <div className="kpi"><div className="v">{rtMoney(agg.invoiced)}</div><div className="k">Greystar invoiced</div><div className="n">Invoice Amount (P)</div></div>
                 <div className="kpi"><div className="v c-g">{rtMoney(agg.rovr_paid)}</div><div className="k">ROVR paid</div><div className="n">of {rtMoney(agg.paid)} paid</div></div>
-                <div className="kpi"><div className="v c-b">{rtMoney(agg.rovr_pending)}</div><div className="k">ROVR pending</div><div className="n">of {rtMoney(agg.invoiced)} contract total</div></div>
+                <div className="kpi"><div className="v c-b">{rtMoney(agg.rovr_pending)}</div><div className="k">ROVR pending</div><div className="n">on {rtMoney(agg.invoiced)} invoiced</div></div>
               </div>
             </div>
 
             <div className="kpis" style={{ marginTop: 12 }}>
-              <div className="kpi"><div className="v">{rtMoney(agg.invoiced)}</div><div className="k">Contract total, {agg.properties} {agg.properties === 1 ? "property" : "properties"}</div></div>
+              <div className="kpi"><div className="v">{rtMoney(agg.invoiced + agg.not_invoiced)}</div><div className="k">Contract total, {agg.properties} {agg.properties === 1 ? "property" : "properties"}</div><div className="n">{rtMoney(agg.invoiced)} invoiced to date</div></div>
               <div className="kpi"><div className="v c-g">{rtMoney(agg.paid)}</div><div className="k">Paid</div></div>
               <div className="kpi"><div className="v c-b">{rtMoney(agg.current)}</div><div className="k">Invoiced</div></div>
               <div className="kpi"><div className="v c-r">{rtMoney(agg.past_due)}</div><div className="k">Overdue{agg.past_due_rows ? `, ${agg.past_due_rows} lines` : ""}</div></div>
-              <div className="kpi"><div className="v c-a">{rtMoney(agg.not_invoiced)}</div><div className="k">Pending</div></div>
+              <div className="kpi"><div className="v c-a">{rtMoney(agg.not_invoiced)}</div><div className="k">Pending</div><div className="n">Contracted, not yet invoiced</div></div>
             </div>
 
             <RtChecksPanel checks={checks} onOpenProperty={onOpenProperty} />
@@ -3126,26 +3175,27 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
               <input type="text" placeholder="Search property, client, engagement ID or invoice #" value={search} onChange={(e) => setSearch(e.target.value)} style={{ minWidth: 320 }} aria-label="Search billing" />
               <BillingStatusSelect value={statusFilter} onChange={onStatusFilterChange} />
               <span className="sp" />
-              <button className="btn" onClick={() => rtExport("csv", imp, evaluated, asOf)}>Export CSV</button>
-              <button className="btn" onClick={() => rtExport("json", imp, evaluated, asOf)}>Export JSON</button>
+              <button className="btn" onClick={() => rtExport("csv", imp, split.contracted, asOf)}>Export CSV</button>
+              <button className="btn" onClick={() => rtExport("json", imp, split.contracted, asOf)}>Export JSON</button>
             </div>
 
             <div className="tw">
               {tab === "totals" ? (
                 <table className="rt-table">
-                  <thead><tr><th>Property</th><th>Client</th><th className="r">Lines</th><th className="r">Total</th><th className="r">Paid</th><th className="r">Outstanding</th><th className="r">Greystar invoiced</th><th className="r">ROVR paid</th><th className="r">ROVR pending</th><th>Status</th></tr></thead>
+                  <thead><tr><th>Property</th><th>Client</th><th className="r">Lines</th><th className="r" title="Invoiced plus pending">Total</th><th className="r">Paid</th><th className="r">Outstanding</th><th className="r">Greystar invoiced</th><th className="r" title="Contracted on Advisory Contracts, not yet invoiced">Pending</th><th className="r">ROVR paid</th><th className="r">ROVR pending</th><th>Status</th></tr></thead>
                   <tbody>
                     {propertyTotals.filter((x) => x.lines.some(shown)).length === 0 ? (
-                      <tr><td colSpan={10} style={{ color: "var(--mut)" }}>No properties match.</td></tr>
+                      <tr><td colSpan={11} style={{ color: "var(--mut)" }}>No properties match.</td></tr>
                     ) : propertyTotals.filter((x) => x.lines.some(shown)).map((x) => (
                       <tr key={x.key} className={x.tracker ? "click" : ""} onClick={x.tracker ? () => onOpenProperty(x.tracker) : undefined}>
                         {nameCell(x.property, x.tracker, x.key, x.engagements)}
                         <td className="rt-wrap">{x.client || "—"}</td>
-                        <td className="r">{x.lines.length}</td>
+                        <td className="r">{x.lines.filter((l) => !l.synthetic).length}</td>
                         <td className="r">{rtMoney(x.total)}</td>
                         <td className="r">{rtMoney(x.paid)}</td>
                         <td className="r">{rtMoney(x.outstanding)}</td>
-                        <td className="r">{rtMoney(x.total)}</td>
+                        <td className="r">{rtMoney(x.invoicedOnly)}</td>
+                        <td className="r">{x.pending ? rtMoney(x.pending) : "—"}</td>
                         <td className="r">{rtMoney(x.rovr_paid)}</td>
                         <td className="r">{rtMoney(x.rovr_pending)}</td>
                         <td>{statusPill(x.status, x.maxDays)}</td>
@@ -3166,13 +3216,13 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
                           {nameCell(r.property, tracker, r.engagement_id)}
                           <td className="rt-wrap">{r.client_owner || "—"}</td>
                           <td>{r.billing_milestone || "—"}{r.warnings.length > 0 && <span className="t-chip t-old" style={{ marginLeft: 6 }} title={r.warnings.join("\n")}>!</span>}</td>
-                          <td>{r.invoice_number || "—"}</td>
+                          <td>{r.synthetic ? <span style={{ color: "var(--mut)" }} title={`Contracted ${rtMoney(r.contract_fee)} on Advisory Contracts${r.already_invoiced ? `, ${rtMoney(r.already_invoiced)} invoiced so far` : ""}`}>From Advisory Contracts</span> : (r.invoice_number || "—")}</td>
                           <td>{r.invoice_date ? fmtDate(r.invoice_date) : "—"}</td>
                           <td>{r.paid_date ? fmtDate(r.paid_date) : "—"}</td>
                           <td className="r">{rtMoney(r.invoiced)}</td>
                           <td className="r">{rtMoney(r.paid)}</td>
                           <td className="r">{rtMoney(r.outstanding)}</td>
-                          <td className="r">{rtMoney(r.invoiced)}</td>
+                          <td className="r">{r.synthetic ? "—" : rtMoney(r.invoiced)}</td>
                           <td className="r">{rtMoney(r.rovr_paid)}</td>
                           <td className="r">{rtMoney(r.rovr_pending)}</td>
                           <td>{statusPill(r.payment_status, r.days_past_due)}</td>
@@ -4035,9 +4085,11 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
   // the Advisory Contracts fees.
   const importBilling = useMemo(() => {
     if (!billingImport || !Array.isArray(billingImport.records)) return null;
-    const evAll = billingImport.records.map((r) => rtEvaluate(r, TODAY, billingImport.settings));
+    const evAll = billingImport.records.filter((r) => r.invoice_date).map((r) => rtEvaluate(r, TODAY, billingImport.settings));
     // Advisory Contracts guides billing: only lines for an executed, contracted service count.
-    const { contracted: ev, excluded } = rtSplitByContract(evAll, allProperties || properties);
+    const { contracted, excluded } = rtSplitByContract(evAll, allProperties || properties);
+    // Pending = contracted fees on Advisory Contracts, less what's invoiced (same as the Billing page).
+    const ev = [...contracted, ...rtContractPendingLines(allProperties || properties, contracted)];
     const t = rtTotals(ev);
     const owed = { greystar: { pending: 0, invoiced: 0, overdue: 0 }, rovr: { pending: 0, invoiced: 0, overdue: 0 } };
     // Tracker properties with any unpaid line — the same set the Payments due dollar figure covers.
@@ -4045,9 +4097,9 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
     const unpaidKeys = new Set();
     ev.forEach((r) => {
       if (r.payment_status === "Paid") return;
-      if (r.invoiced > 0) { const up = unpaidMatch(r); unpaidKeys.add(up ? `p${up.id}` : rtBaseId(r.engagement_id)); }
+      if (r.invoiced > 0) { const up = r._p || unpaidMatch(r); unpaidKeys.add(up ? `p${up.id}` : rtBaseId(r.engagement_id)); }
       const bucket = r.payment_status === "Past due" ? "overdue" : r.payment_status === "Current" ? "invoiced" : "pending";
-      const rv = Math.max(0, Math.min(r.rovr_pending, r.invoiced));
+      const rv = r.synthetic ? r.rovr_share : Math.max(0, Math.min(r.rovr_pending, r.invoiced));
       owed.rovr[bucket] += rv; owed.greystar[bucket] += r.invoiced - rv;
     });
     const match = rtPropertyMatcher(allProperties || properties);
@@ -7126,7 +7178,7 @@ const BM_RT_LINE = {
 function buildBillingMilestoneRows(properties, billingImport) {
   const match = rtPropertyMatcher(properties);
   const rtByProp = new Map();
-  const recs = billingImport && billingImport.records ? billingImport.records.map((r) => rtEvaluate(r, TODAY, billingImport.settings)) : [];
+  const recs = billingImport && billingImport.records ? billingImport.records.filter((r) => r.invoice_date).map((r) => rtEvaluate(r, TODAY, billingImport.settings)) : [];
   recs.forEach((r) => { const p = match(r); if (!p) return; if (!rtByProp.has(p.id)) rtByProp.set(p.id, []); rtByProp.get(p.id).push(r); });
   const norm = (x) => String(x || "").trim().toLowerCase();
   const rows = [];
@@ -7544,7 +7596,7 @@ function AdvisoryContractsView({ properties, onOpenProperty, supabaseClient, bil
   const billingByProp = useMemo(() => {
     const m = new Map();
     if (!billingImport || !Array.isArray(billingImport.records)) return m;
-    const ev = billingImport.records.map((r) => rtEvaluate(r, TODAY, billingImport.settings));
+    const ev = billingImport.records.filter((r) => r.invoice_date).map((r) => rtEvaluate(r, TODAY, billingImport.settings));
     const match = rtPropertyMatcher(properties);
     // Billed/paid only count lines Advisory Contracts covers; the checks below still see every line.
     rtSplitByContract(ev, properties).contracted.forEach((r) => { const p = match(r); if (!p) return; if (!m.has(p.id)) m.set(p.id, { billed: 0, paid: 0, checks: [] }); const e = m.get(p.id); e.billed += r.invoiced; e.paid += r.paid; });
