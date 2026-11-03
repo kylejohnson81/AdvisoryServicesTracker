@@ -2732,7 +2732,7 @@ function rtSplitByContract(evaluated, properties) {
   (evaluated || []).forEach((r) => {
     const p = match(r);
     const reason = rtNotContractedReason(r, p);
-    if (reason) excluded.push({ line: r, property: p, reason }); else contracted.push(r);
+    if (reason) excluded.push({ line: r, property: p, reason }); else contracted.push({ ...r, _p: p });
   });
   return { contracted, excluded };
 }
