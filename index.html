@@ -4985,7 +4985,7 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
         <div className="contract-dates-list" style={{ marginBottom: 10 }}>
           <div className="contract-date-row">
             <span className="field-label">Advisory Contract Drafted</span>
-            <span className="mono">{program.advisoryContractDrafted ? fmtDate(program.advisoryContractDrafted) : "Not yet"}</span>
+            <span className="mono" title={!program.advisoryContractDrafted && program.advisoryContractExecuted ? "The contract was executed, so a draft went out; its date wasn't recorded" : undefined}>{program.advisoryContractDrafted ? fmtDate(program.advisoryContractDrafted) : program.advisoryContractExecuted ? `Done · executed ${fmtDate(program.advisoryContractExecuted)}` : "Not yet"}</span>
           </div>
         </div>
 
