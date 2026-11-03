@@ -2667,17 +2667,24 @@ function rtTotals(evaluated) {
   return t;
 }
 
-const RT_EXPORT_FIELDS = ["source_row", "engagement_id", "client_owner", "property", "yardi_code", "service_bucket", "billing_milestone", "tracker_status", "invoice_number", "invoice_date", "paid_date", "rovr_payment_date", "invoiced", "rovr_pending", "rovr_paid", "payment_status", "past_due", "past_due_amount", "days_past_due", "warnings"];
+const RT_EXPORT_FIELDS = ["source_row", "engagement_id", "client_owner", "property", "yardi_code", "service_bucket", "billing_milestone", "tracker_status", "invoice_number", "invoice_date", "paid_date", "rovr_payment_date", "invoiced", "rovr_pending", "rovr_paid", "payment_status", "past_due", "past_due_amount", "days_past_due", "tracker_property", "billing_variance", "warnings"];
 function rtDownload(name, text, type) {
   const url = URL.createObjectURL(new Blob([text], { type }));
   const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-function rtExport(kind, imp, evaluated, asOf) {
+// evaluated: the lines that count; excluded: [{ line, property, reason }] invoiced without an executed
+// contract for that service — exported too, with the reason in billing_variance (blank when it counts).
+function rtExport(kind, imp, evaluated, asOf, excluded) {
   const stamp = asOf.replace(/-/g, "");
-  const records = evaluated.map((r) => Object.fromEntries(RT_EXPORT_FIELDS.map((f) => [f, r[f] === undefined ? null : r[f]])));
+  const all = [
+    ...evaluated.map((r) => ({ ...r, tracker_property: r._p ? `${r._p.code} ${r._p.name}` : null, billing_variance: "" })),
+    ...(excluded || []).map((x) => ({ ...x.line, tracker_property: x.property ? `${x.property.code} ${x.property.name}` : null, billing_variance: `Billing variance: ${x.reason}` })),
+  ].sort((a, b) => Number(a.source_row) - Number(b.source_row));
+  const records = all.map((r) => Object.fromEntries(RT_EXPORT_FIELDS.map((f) => [f, r[f] === undefined ? null : r[f]])));
   if (kind === "json") {
-    const env = { generated_at: new Date().toISOString(), source_file: imp.source_file, as_of_date: asOf, settings: { ...RT_DEFAULT_SETTINGS, ...(imp.settings || {}) }, totals: rtTotals(evaluated), records };
+    const variance = (excluded || []).reduce((s, x) => s + (x.line.invoiced || 0), 0);
+    const env = { generated_at: new Date().toISOString(), source_file: imp.source_file, as_of_date: asOf, settings: { ...RT_DEFAULT_SETTINGS, ...(imp.settings || {}) }, totals: { ...rtTotals(evaluated), billing_variance_rows: (excluded || []).length, billing_variance: rtRound2(variance) }, records };
     rtDownload(`billing_import_${stamp}.json`, JSON.stringify(env, null, 2), "application/json");
   } else {
     const esc = (v) => { const s = Array.isArray(v) ? v.join(" | ") : v == null ? "" : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
@@ -2783,20 +2790,20 @@ function rtContractPendingLines(properties, contractedLines) {
 
 // Lists Revenue Tracker lines left out of billing because Advisory Contracts doesn't cover them.
 function RtExcludedPanel({ excluded, onOpenProperty }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   if (!excluded || !excluded.length) return null;
   const total = excluded.reduce((s, x) => s + (x.line.invoiced || 0), 0);
   return (
-    <div className="card" style={{ marginTop: 12 }}>
+    <div className="card" style={{ marginTop: 12, borderColor: "#9E3B2E" }}>
       <button className="link" style={{ textDecoration: "none", color: "var(--txt)", display: "flex", gap: 8, alignItems: "center", width: "100%" }} onClick={() => setOpen((v) => !v)}>
-        <b style={{ fontWeight: 600 }}>Not on Advisory Contracts, not counted</b>
+        <span className="pill" style={{ background: "#6e2a28", color: "#ffc7c1", fontSize: 11 }}>Billing variance</span><b style={{ fontWeight: 600 }}>Invoiced without an executed contract</b>
         <span style={{ color: "var(--mut)" }}>{excluded.length} line{excluded.length === 1 ? "" : "s"} · {rtMoney(total)}</span>
         <span style={{ marginLeft: "auto", color: "var(--mut)", fontSize: 12 }}>{open ? "Hide" : "Show"}</span>
       </button>
       {open && (
         <div className="tw" style={{ marginTop: 8 }}>
           <table className="rt-table">
-            <thead><tr><th>Property</th><th>Engagement</th><th>Service</th><th>Milestone</th><th className="r">Amount</th><th>Why it isn't counted</th></tr></thead>
+            <thead><tr><th>Property</th><th>Engagement</th><th>Service</th><th>Milestone</th><th className="r">Amount</th><th>Variance</th></tr></thead>
             <tbody>
               {excluded.map(({ line: r, property: p, reason }) => (
                 <tr key={r.source_row}>
@@ -2812,7 +2819,7 @@ function RtExcludedPanel({ excluded, onOpenProperty }) {
           </table>
         </div>
       )}
-      <div className="foot" style={{ marginTop: 6 }}>Advisory Contracts guides billing. These lines are left out of every billing total until the property's advisory contract is executed with that service selected.</div>
+      <div className="foot" style={{ marginTop: 6 }}>These lines were invoiced, but Advisory Contracts has no executed contract covering them. They are left out of every billing total and marked in the billing_variance column of the export. Resolve them by executing the contract (or selecting the service) in Advisory Contracts, or correcting the Revenue Tracker.</div>
     </div>
   );
 }
@@ -3177,8 +3184,8 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
               <input type="text" placeholder="Search property, client, engagement ID or invoice #" value={search} onChange={(e) => setSearch(e.target.value)} style={{ minWidth: 320 }} aria-label="Search billing" />
               <BillingStatusSelect value={statusFilter} onChange={onStatusFilterChange} />
               <span className="sp" />
-              <button className="btn" onClick={() => rtExport("csv", imp, split.contracted, asOf)}>Export CSV</button>
-              <button className="btn" onClick={() => rtExport("json", imp, split.contracted, asOf)}>Export JSON</button>
+              <button className="btn" onClick={() => rtExport("csv", imp, split.contracted, asOf, split.excluded)} title="Every invoiced line; billing variances are marked in the billing_variance column">Export CSV</button>
+              <button className="btn" onClick={() => rtExport("json", imp, split.contracted, asOf, split.excluded)}>Export JSON</button>
             </div>
 
             <div className="tw">
@@ -4186,7 +4193,7 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
           ))}
         </div>
 
-        <div className="sec">Billing{importBilling && <span style={{ fontWeight: 400 }}> · from {importBilling.source}{importBilling.importedAt ? `, imported ${fmtDate(importBilling.importedAt.slice(0, 10))}` : ""}{importBilling.excludedCount > 0 && <> · <button className="link" onClick={() => onOpenBilling && onOpenBilling("all")} title="See them on the Billing page">{importBilling.excludedCount} line{importBilling.excludedCount === 1 ? "" : "s"} ({money(importBilling.excludedTotal)}) not on Advisory Contracts, not counted</button></>}</span>}</div>
+        <div className="sec">Billing{importBilling && <span style={{ fontWeight: 400 }}> · from {importBilling.source}{importBilling.importedAt ? `, imported ${fmtDate(importBilling.importedAt.slice(0, 10))}` : ""}</span>}</div>
         <div className="kpis">
           <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("due")} title="Open Billing: all unpaid payments">
             <div className="v c-a">{money(unpaidTotal)}</div><div className="k">Payments due</div>
