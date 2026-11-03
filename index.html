@@ -4587,7 +4587,7 @@ function NoteBody({ text }) {
   );
 }
 
-function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSetDecision, onSetPriority, onUpdateAttribute, onUpdateNotes, onUpdateNotesLog, onSetDDDate, onToggleDueDiligence, onToggleServiceOption, onSetServiceContractDate, onSetISPDate, onSetExpectedTCO, onSetDeploymentLiveDate, onSetBillingMilestone, ispCount, consultCount, ispProgram, onOpenIspContracts, rfpProposals, rfpDocs, onOpenRfp, onViewRfp, regionsList, onAddRegion, currentUserEmail }) {
+function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSetDecision, onSetPriority, onUpdateAttribute, onUpdateNotes, onUpdateNotesLog, onSetDDDate, onToggleDueDiligence, onToggleServiceOption, onSetServiceContractDate, onSetISPDate, onSetExpectedTCO, onSetDeploymentLiveDate, onSetBillingMilestone, ispCount, consultCount, ispProgram, onOpenIspContracts, rfpProposals, rfpDocs, onOpenRfp, onViewRfp, regionsList, onAddRegion, currentUserEmail, supabaseClient }) {
   const [notesOpen, setNotesOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState(null);
@@ -5163,6 +5163,7 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
             </div>
           );
         })()}
+        <SitePlansSection property={property} supabaseClient={supabaseClient} userEmail={currentUserEmail} />
           </div>
         </div>
       </div>
@@ -7392,7 +7393,7 @@ function ImportExportModal({ section: initialSection = "import", onClose, proper
         <div className="modal-head">
           <div>
             {mode && <button className="btn-ghost" onClick={() => reset(null)} disabled={busy} style={{ marginBottom: 6 }}>← Back</button>}
-            <h2>{mode === "contracts" ? "Refresh Contract Data" : mode === "master" ? "Refresh Master Data" : mode === "isp" ? "ISP Contracts — Due Diligence" : mode === "rfp" ? "RFPs" : "Import / Export"}</h2>
+            <h2>{mode === "contracts" ? "Refresh Contract Data" : mode === "master" ? "Refresh Master Data" : mode === "isp" ? "ISP Contracts — Due Diligence" : mode === "rfp" ? "RFPs" : mode === "siteplans" ? "Site Plans" : "Import / Export"}</h2>
           </div>
           <button className="icon-btn" onClick={onClose} disabled={busy}><X size={18} /></button>
         </div>
@@ -7435,6 +7436,13 @@ function ImportExportModal({ section: initialSection = "import", onClose, proper
               <button className="btn-primary" onClick={() => reset("isp")}>Choose</button>)}
             {card("RFPs", "Upload the RFPs you send to providers, and consolidated RFPs, for one or many properties at once. Each file is paired to its property from the file name, and you can change the pairing before uploading. They open from View RFP on the property record.",
               <button className="btn-primary" onClick={() => reset("rfp")}>Choose</button>)}
+            {card("Site Plans", "Upload site plans (usually PDFs) for one or many properties at once. Each file is paired to its property from the file name, and you can change the pairing before uploading. They show under Site Plans on the property record.",
+              <button className="btn-primary" onClick={() => reset("siteplans")}>Choose</button>)}
+          </div>
+        )}
+        {mode === "siteplans" && (
+          <div style={{ marginTop: 8 }}>
+            <SitePlanBulkUpload properties={properties} supabaseClient={supabaseClient} userEmail={userEmail} />
           </div>
         )}
         {mode === "rfp" && (
@@ -7449,7 +7457,7 @@ function ImportExportModal({ section: initialSection = "import", onClose, proper
         )}
         {revenueOpen && <RevenueImportModal previous={billingImport} properties={properties} onClose={() => setRevenueOpen(false)} onSave={onSaveBillingImport} />}
 
-        {mode && mode !== "isp" && mode !== "rfp" && (
+        {mode && mode !== "isp" && mode !== "rfp" && mode !== "siteplans" && (
           <div style={{ marginTop: 8 }}>
             <input ref={fileRef} type="file" accept=".xlsx,.xlsm,.xls,.csv" style={{ display: "none" }} onChange={onFile} />
             {!preview && !done && (
@@ -9497,6 +9505,170 @@ function RfpDetailsModal({ property, proposals, documents, supabaseClient, userE
   );
 }
 
+
+
+// ---- Site Plans: PDFs (or images) kept on the property record. ----
+const SITE_PLAN_ACCEPT = ".pdf,.png,.jpg,.jpeg,.tif,.tiff,.dwg,.dxf";
+async function sitePlanUpload(supabaseClient, code, file, userEmail) {
+  const file_path = `siteplans/${code}/${Date.now()}-${rfpSafeName(file.name)}`;
+  const up = await supabaseClient.storage.from(ISP_BUCKET).upload(file_path, file, { contentType: file.type || "application/octet-stream", upsert: false });
+  if (up.error) throw new Error(`Upload failed: ${up.error.message}`);
+  const ins = await supabaseClient.from("site_plans").insert([{ property_code: code, title: file.name.replace(/\.[a-z0-9]+$/i, ""), file_path, file_name: file.name, file_size: file.size, created_by: userEmail || null }]).select();
+  if (ins.error) { await supabaseClient.storage.from(ISP_BUCKET).remove([file_path]); throw new Error(ins.error.message); }
+  return ins.data && ins.data[0];
+}
+function useSitePlans(supabaseClient, code) {
+  const [list, setList] = useState(null);
+  const load = React.useCallback(() => {
+    if (!supabaseClient || !code) return;
+    supabaseClient.from("site_plans").select("*").eq("property_code", code).order("created_at", { ascending: false })
+      .then(({ data, error }) => setList(error ? [] : data || []));
+  }, [supabaseClient, code]);
+  useEffect(() => { load(); }, [load]);
+  return [list, load];
+}
+function SitePlansModal({ property, supabaseClient, userEmail, onClose, onChanged }) {
+  const [list, load] = useSitePlans(supabaseClient, property.code);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const ref = React.useRef(null);
+  const refresh = () => { load(); if (onChanged) onChanged(); };
+  const onFiles = async (e) => {
+    const files = [...(e.target.files || [])]; e.target.value = "";
+    if (!files.length) return;
+    setBusy(true); setMsg(`Uploading ${files.length} file${files.length === 1 ? "" : "s"}…`);
+    let ok = 0; const bad = [];
+    for (const f of files) { try { await sitePlanUpload(supabaseClient, property.code, f, userEmail); ok++; } catch (x) { bad.push(`${f.name}: ${x.message}`); } }
+    setBusy(false); setMsg(bad.length ? `Added ${ok}. Couldn't add ${bad.join("; ")}` : `Added ${ok} site plan${ok === 1 ? "" : "s"}.`); refresh();
+  };
+  const remove = async (d) => {
+    if (!window.confirm(`Remove ${d.title || d.file_name}?`)) return;
+    const { error } = await supabaseClient.from("site_plans").delete().eq("id", d.id);
+    if (error) { setMsg(`Couldn't remove: ${error.message}`); return; }
+    await supabaseClient.storage.from(ISP_BUCKET).remove([d.file_path]);
+    refresh();
+  };
+  const saveTitle = async (d, title) => {
+    setEditing(null);
+    if (!title.trim() || title === d.title) return;
+    const { error } = await supabaseClient.from("site_plans").update({ title: title.trim() }).eq("id", d.id);
+    if (error) setMsg(`Couldn't rename: ${error.message}`); else refresh();
+  };
+  return (
+    <div className="modal-overlay">
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 760, width: "94vw", maxHeight: "90vh", overflowY: "auto" }}>
+        <div className="modal-head">
+          <div>
+            <div className="field-label" style={{ margin: 0 }}>Site Plans</div>
+            <h2 style={{ margin: "2px 0" }}><span className="mono" style={{ opacity: 0.7 }}>{property.code}</span> {property.name}</h2>
+          </div>
+          <button className="icon-btn" onClick={onClose}><X size={18} /></button>
+        </div>
+        <input ref={ref} type="file" multiple accept={SITE_PLAN_ACCEPT} style={{ display: "none" }} onChange={onFiles} />
+        <div style={{ display: "flex", gap: 10, alignItems: "center", margin: "4px 0 12px" }}>
+          <button className="btn-primary" disabled={busy} onClick={() => ref.current && ref.current.click()}>+ Add site plans</button>
+          <span style={{ fontSize: 12.5, opacity: 0.75 }}>PDFs, usually; images and CAD files are kept too. Select several at once.</span>
+        </div>
+        {msg && <div style={{ fontSize: 13, marginBottom: 10, color: /couldn|fail/i.test(msg) ? "#ff8f86" : undefined }}>{msg}</div>}
+        {list == null ? <div className="dim" style={{ fontSize: 13 }}>Loading…</div> : list.length === 0 ? <div className="dim" style={{ fontSize: 13 }}>No site plans on file yet.</div> : (
+          <div className="contract-dates-list">
+            {list.map((d) => (
+              <div className="contract-date-row" key={d.id} style={{ gap: 10 }}>
+                <span style={{ fontSize: 13, flex: 1, minWidth: 0 }}>
+                  {editing === d.id
+                    ? <input autoFocus defaultValue={d.title || ""} onBlur={(e) => saveTitle(d, e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); if (e.key === "Escape") setEditing(null); }} style={{ width: "100%" }} />
+                    : <><b>{d.title || d.file_name}</b><span style={{ opacity: 0.65 }}> · {d.file_name}{d.file_size ? ` · ${(d.file_size / 1048576).toFixed(1)} MB` : ""} · added {ispDate(String(d.created_at).slice(0, 10))}{d.created_by ? ` by ${String(d.created_by).split("@")[0]}` : ""}</span></>}
+                </span>
+                <span style={{ display: "flex", gap: 8 }}>
+                  <button className="btn-ghost" onClick={() => rfpOpenFile(supabaseClient, d.file_path).catch((x) => setMsg(`Couldn't open it: ${x.message}`))}>View</button>
+                  <button className="link" onClick={() => setEditing(d.id)}>Rename</button>
+                  <button className="link" style={{ color: "#ff8f86" }} onClick={() => remove(d)}>Remove</button>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+// The property record's Site Plans spot (bottom right).
+function SitePlansSection({ property, supabaseClient, userEmail }) {
+  const [list, load] = useSitePlans(supabaseClient, property && property.code);
+  const [open, setOpen] = useState(false);
+  if (!supabaseClient) return null;
+  const n = list ? list.length : 0;
+  return (
+    <>
+      <div className="section-header">Site Plans</div>
+      <div className="contract-dates-list" style={{ marginBottom: 18 }}>
+        <div className="contract-date-row" style={{ cursor: "pointer" }} onClick={() => setOpen(true)}>
+          <span className="field-label" style={{ margin: 0 }}>
+            {list == null ? "Loading…" : n ? `${n} site plan${n === 1 ? "" : "s"} on file` : "No site plans on file"}
+            {n > 0 && <span style={{ textTransform: "none", letterSpacing: 0, marginLeft: 8, opacity: 0.85 }}>· latest {list[0].title || list[0].file_name}</span>}
+          </span>
+          <span style={{ display: "flex", gap: 8 }}>
+            <button className="btn-primary" onClick={(e) => { e.stopPropagation(); setOpen(true); }}>Site Plans</button>
+            {n > 0 && <button className="btn-ghost" title={`Open ${list[0].file_name}`} onClick={(e) => { e.stopPropagation(); rfpOpenFile(supabaseClient, list[0].file_path).catch((x) => window.alert(`Couldn't open it: ${x.message}`)); }}>View latest</button>}
+          </span>
+        </div>
+      </div>
+      {open && <SitePlansModal property={property} supabaseClient={supabaseClient} userEmail={userEmail} onClose={() => setOpen(false)} onChanged={load} />}
+    </>
+  );
+}
+// Import / Export → Site Plans: pick files, pair each to a property from its file name, upload.
+function SitePlanBulkUpload({ properties, supabaseClient, userEmail }) {
+  const [rows, setRows] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const fileRef = React.useRef(null);
+  const sorted = useMemo(() => properties.slice().sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true })), [properties]);
+  const setRow = (i, patch) => setRows((xs) => xs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const onFiles = (e) => {
+    const files = [...(e.target.files || [])]; e.target.value = "";
+    setRows((xs) => [...xs, ...files.map((f) => { const code = rfpGuessProperty(f.name, properties); return { file: f, code, guessed: !!code, state: null, ok: false }; })]);
+  };
+  const upload = async () => {
+    setBusy(true);
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      if (r.ok || !r.code) continue;
+      setRow(i, { state: "Uploading…", err: false });
+      try { await sitePlanUpload(supabaseClient, r.code, r.file, userEmail); setRow(i, { state: `Added to ${r.code}`, ok: true }); }
+      catch (x) { setRow(i, { state: x.message || String(x), err: true }); }
+    }
+    setBusy(false);
+  };
+  const pending = rows.filter((r) => !r.ok);
+  const unpaired = pending.filter((r) => !r.code).length;
+  return (
+    <div>
+      <div style={{ fontSize: 13, opacity: 0.85, marginBottom: 10 }}>Select one or more site plans (usually PDFs). Each is paired to a property from its file name (P-code, property name or a former name); check the pairing and upload. They show under Site Plans on each property record.</div>
+      <input ref={fileRef} type="file" multiple accept={SITE_PLAN_ACCEPT} style={{ display: "none" }} onChange={onFiles} />
+      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+        <button className="btn-ghost" onClick={() => fileRef.current && fileRef.current.click()} disabled={busy}>Choose files</button>
+        {rows.length > 0 && <button className="btn-primary" onClick={upload} disabled={busy || !pending.length || unpaired === pending.length}>Upload {pending.length - unpaired} file{pending.length - unpaired === 1 ? "" : "s"}</button>}
+        {unpaired > 0 && <span style={{ fontSize: 12.5, color: "#ffd98a", alignSelf: "center" }}>{unpaired} need a property</span>}
+      </div>
+      {rows.length > 0 && (
+        <div className="contract-dates-list">
+          {rows.map((r, i) => (
+            <div className="contract-date-row" key={i} style={{ flexWrap: "wrap", gap: 8 }}>
+              <span style={{ fontSize: 13, flex: "1 1 220px", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }} title={r.file.name}>{r.file.name}</span>
+              <select value={r.code} disabled={r.ok || busy} onChange={(e) => setRow(i, { code: e.target.value, guessed: false })} style={{ maxWidth: 260, borderColor: r.code ? undefined : "#ffd98a" }}>
+                <option value="">Choose property…</option>
+                {sorted.map((p) => <option key={p.code} value={p.code}>{p.code} {p.name}</option>)}
+              </select>
+              <span style={{ fontSize: 12.5, minWidth: 120, color: r.err ? "#ff8f86" : r.ok ? "#b8efc7" : undefined }}>{r.state || (r.code ? (r.guessed ? "Matched from file name" : "") : "")}</span>
+              {!r.ok && <button className="link" disabled={busy} onClick={() => setRows((xs) => xs.filter((_, j) => j !== i))}>Remove</button>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Bulk RFP upload (Import / Export → Import): pick files, pair each to a property, upload.
 function rfpGuessProperty(fileName, properties) {
@@ -11971,7 +12143,7 @@ function App() {
       {programProperty && !phaseSel && (
         <ProgramModal property={programProperty} onClose={closeProgram} onOpenPhase={openPhaseFromProgram} onSetManualStatus={setManualStatus} onSetDecision={setDecision} onSetPriority={setPriority} onUpdateAttribute={updateAttribute} onUpdateNotes={updateNotes} onUpdateNotesLog={updateNotesLog} onSetDDDate={setDDDate} onToggleDueDiligence={toggleDueDiligenceSelected} onToggleServiceOption={toggleServiceOption} onSetServiceContractDate={setServiceContractDate} onSetISPDate={setISPDate} onSetExpectedTCO={setExpectedTCO} onSetDeploymentLiveDate={setDeploymentLiveDate} onSetBillingMilestone={setBillingMilestone} ispCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind !== "consulting").length : 0} consultCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind === "consulting").length : 0} ispProgram={programProperty ? ispCurrentProgram(ispContracts.filter((c) => c.property_code === programProperty.code)) : null} onOpenIspContracts={() => { if (!programProperty) return; setIspReturnTo(programPropertyId); setProgramPropertyId(null); setIspFor(programProperty.code); }} rfpProposals={programProperty ? rfpProposals.filter((x) => x.property_code === programProperty.code) : []} rfpDocs={programProperty ? rfpDocs.filter((d) => d.property_code === programProperty.code) : []}
           onOpenRfp={() => { if (!programProperty) return; setIspReturnTo(programPropertyId); setProgramPropertyId(null); setRfpFor(programProperty.code); }}
-          onViewRfp={(d) => { if (d) { rfpOpenDoc(supabaseClient, d).catch((x) => window.alert(`Couldn't open the RFP: ${x.message}`)); } else if (programProperty) { setIspReturnTo(programPropertyId); setProgramPropertyId(null); setRfpFor(programProperty.code); } }} regionsList={regionsList} onAddRegion={addRegion} currentUserEmail={session && session.user ? session.user.email : null} />
+          onViewRfp={(d) => { if (d) { rfpOpenDoc(supabaseClient, d).catch((x) => window.alert(`Couldn't open the RFP: ${x.message}`)); } else if (programProperty) { setIspReturnTo(programPropertyId); setProgramPropertyId(null); setRfpFor(programProperty.code); } }} regionsList={regionsList} onAddRegion={addRegion} currentUserEmail={session && session.user ? session.user.email : null} supabaseClient={supabaseClient} />
       )}
 
       {phaseProperty && phaseSel && (
