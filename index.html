@@ -2449,13 +2449,15 @@ const BILLING_STATUS_FILTERS = [
   { key: "all", label: "All statuses" },
   { key: "due", label: "Payments due (unpaid)" },
   { key: "pending", label: "Pending" },
-  { key: "invoiced", label: "Invoiced" },
+  { key: "invoiced", label: "Invoiced (has an invoice date)" },
   { key: "overdue", label: "Overdue" },
   { key: "paid", label: "Paid" },
 ];
 function billingStatusMatches(filter, bucket) {
   if (!filter || filter === "all") return true;
   if (filter === "due") return bucket !== "paid";
+  // Invoiced = everything with an invoice date: not yet due, overdue or paid.
+  if (filter === "invoiced") return bucket === "invoiced" || bucket === "overdue" || bucket === "paid";
   return filter === bucket;
 }
 function BillingStatusSelect({ value, onChange }) {
@@ -3158,7 +3160,7 @@ function BillingView({ properties, allProperties, onOpenProperty, onSetPaymentSt
             <div className="kpis" style={{ marginTop: 12 }}>
               <div className="kpi"><div className="v">{rtMoney(agg.invoiced + agg.not_invoiced)}</div><div className="k">Contract total, {agg.properties} {agg.properties === 1 ? "property" : "properties"}</div><div className="n">{rtMoney(agg.invoiced)} invoiced to date</div></div>
               <div className="kpi"><div className="v c-g">{rtMoney(agg.paid)}</div><div className="k">Paid</div></div>
-              <div className="kpi"><div className="v c-b">{rtMoney(agg.current)}</div><div className="k">Invoiced</div></div>
+              <div className="kpi"><div className="v c-b">{rtMoney(agg.invoiced)}</div><div className="k">Invoiced</div><div className="n">Everything with an invoice date · {rtMoney(agg.current)} not yet due</div></div>
               <div className="kpi"><div className="v c-r">{rtMoney(agg.past_due)}</div><div className="k">Overdue{agg.past_due_rows ? `, ${agg.past_due_rows} lines` : ""}</div></div>
               <div className="kpi"><div className="v c-a">{rtMoney(agg.not_invoiced)}</div><div className="k">Pending</div><div className="n">Contracted, not yet invoiced</div></div>
             </div>
@@ -4188,13 +4190,13 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
         <div className="kpis">
           <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("due")} title="Open Billing: all unpaid payments">
             <div className="v c-a">{money(unpaidTotal)}</div><div className="k">Payments due</div>
-            <div className="n">{billingSummary.unpaidProperties || 0} {billingSummary.unpaidProperties === 1 ? "property" : "properties"} · Pending + Invoiced + Overdue</div>
+            <div className="n">{billingSummary.unpaidProperties || 0} {billingSummary.unpaidProperties === 1 ? "property" : "properties"} · Pending + unpaid invoices</div>
           </button>
           <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("pending")} title="Open Billing: Pending (contracted, future services)">
             <div className="v">{money(billingSummary.pending)}</div><div className="k">Pending</div><div className="n">Contracted, future services</div>
           </button>
-          <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("invoiced")} title="Open Billing: Invoiced, within net 30">
-            <div className="v c-b">{money(billingSummary.invoiced)}</div><div className="k">Invoiced</div><div className="n">Within net {NET_TERMS_DAYS}</div>
+          <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("invoiced")} title="Open Billing: everything with an invoice date (paid, overdue or not yet due)">
+            <div className="v c-b">{money(billingSummary.invoiced + billingSummary.overdue + billingSummary.paid)}</div><div className="k">Invoiced</div><div className="n">Everything with an invoice date · {money(billingSummary.invoiced)} not yet due</div>
           </button>
           <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("overdue")} title="Open Billing: Overdue">
             <div className="v c-r">{money(billingSummary.overdue)}</div><div className="k">Overdue</div><div className="n">Over {NET_TERMS_DAYS} days since invoice</div>
