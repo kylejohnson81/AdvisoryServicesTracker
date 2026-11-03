@@ -564,6 +564,9 @@
 .proto-dash .wrap{max-width:1240px;margin:0 auto;padding:18px 20px 60px}
 .proto-dash .ac-table th,.proto-dash .ac-table td{padding:9px 8px}
 .proto-dash .ac-fit table{table-layout:auto}
+.proto-dash .rfp-cmp th:first-child,.proto-dash .rfp-cmp td:first-child{position:sticky;left:0;z-index:1;background:var(--card2)}
+.proto-dash .rfp-cmp td{min-width:190px}
+.proto-dash .rfp-cmp td:first-child{min-width:140px}
 .proto-dash .ac-fit th{white-space:normal;vertical-align:bottom;line-height:1.25}
 .proto-dash .ac-fit td{white-space:normal;vertical-align:top;overflow-wrap:anywhere;line-height:1.35}
 .proto-dash .ac-fit th,.proto-dash .ac-fit td{padding:8px 7px}
@@ -9364,7 +9367,7 @@ function RfpDetailsModal({ property, proposals, documents, supabaseClient, userE
   const rows = RFP_COMPARE.filter(([k]) => mine.some((p) => rfpVal(p, k) != null));
   return (
     <div className="modal-overlay">
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 1240, width: "96vw", maxHeight: "92vh", overflowY: "auto" }}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "min(1880px, 98vw)", width: "98vw", maxHeight: "94vh", overflowY: "auto" }}>
        <div className="proto-dash" style={{ background: "transparent" }}>
         <div className="modal-head">
           <div>
@@ -9389,7 +9392,7 @@ function RfpDetailsModal({ property, proposals, documents, supabaseClient, userE
         {adding && <RfpAddProvider property={property} supabaseClient={supabaseClient} userEmail={userEmail} onCancel={() => setAdding(false)}
           onAdded={(row) => { setAdding(false); if (onChanged) onChanged(); setOpen(row); }} />}
         {mine.length === 0 ? <div className="dim" style={{ fontSize: 13 }}>No provider details yet.</div> : (
-          <div className="tw" style={{ overflowX: "auto" }}>
+          <div className="tw rfp-cmp" style={{ overflowX: "auto", maxWidth: "100%" }}>
             <table>
               <thead>
                 <tr>
