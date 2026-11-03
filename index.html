@@ -3714,7 +3714,7 @@ function OwnerRecordModal({ ownerName, record, items, clientNotes, onSave, onClo
   );
 }
 
-function PropertiesView({ properties, onOpenProperty, callNotes, search, setSearch, portfolios, clientNotes, onSaveOwner, supabaseClient }) {
+function PropertiesView({ properties, onOpenProperty, callNotes, search, setSearch, portfolios, clientNotes, onSaveOwner, supabaseClient, showClosed, onToggleClosed, closedCount }) {
   const [mode, setModeState] = useState(() => { try { return localStorage.getItem("clientPageMode") || "owner"; } catch (e) { return "owner"; } });
   const setMode = (m) => { setModeState(m); try { localStorage.setItem("clientPageMode", m); } catch (e) {} };
   const [expanded, setExpanded] = useState(() => new Set());
@@ -3770,6 +3770,11 @@ function PropertiesView({ properties, onOpenProperty, callNotes, search, setSear
           <input type="text" placeholder={mode === "owner" ? "Search owners or properties" : "Search properties"} value={search} onChange={(e) => setSearch(e.target.value)} style={{ minWidth: 260 }} aria-label="Search" />
           {mode === "owner" && shownGroups.length > 0 && (
             <button className="link" onClick={() => setExpanded(allOpen ? new Set() : new Set(shownGroups.map((g) => g.key)))}>{allOpen ? "Collapse all" : "Expand all"}</button>
+          )}
+          {onToggleClosed && (
+            <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, marginLeft: "auto", cursor: "pointer" }} title="Show properties that are closed (including duplicates closed in the Change Log)">
+              <input type="checkbox" checked={!!showClosed} onChange={(e) => onToggleClosed(e.target.checked)} /> Show closed{closedCount ? ` (${closedCount})` : ""}
+            </label>
           )}
         </div>
         <div className="tw">
@@ -11194,6 +11199,8 @@ function App() {
   const [search, setSearch] = useState("");
   const [showClosed, setShowClosed] = useState(false);
   const [showProspecting, setShowProspecting] = useState(true);
+  const [clientShowClosed, setClientShowClosedState] = useState(() => { try { return localStorage.getItem("clientShowClosed") === "1"; } catch (e) { return false; } });
+  const setClientShowClosed = (v) => { setClientShowClosedState(v); try { localStorage.setItem("clientShowClosed", v ? "1" : "0"); } catch (e) {} };
   const [programPropertyId, setProgramPropertyId] = useState(null);
   function loadRfp() {
     if (!supabaseClient) return;
@@ -11876,7 +11883,8 @@ function App() {
         />
       )}
       {view === "properties" && (
-        <PropertiesView properties={visible} onOpenProperty={(p) => openProgram(p)} callNotes={callNotes} search={search} setSearch={setSearch} portfolios={portfolios} clientNotes={clientNotes} onSaveOwner={saveOwnerRecord} supabaseClient={supabaseClient} />
+        <PropertiesView properties={clientShowClosed ? properties.filter((p) => showProspecting || computeStatus(p) !== "Prospecting") : visible}
+          showClosed={clientShowClosed} onToggleClosed={setClientShowClosed} closedCount={properties.filter((p) => computeStatus(p) === "Closed").length} onOpenProperty={(p) => openProgram(p)} callNotes={callNotes} search={search} setSearch={setSearch} portfolios={portfolios} clientNotes={clientNotes} onSaveOwner={saveOwnerRecord} supabaseClient={supabaseClient} />
       )}
 
 
