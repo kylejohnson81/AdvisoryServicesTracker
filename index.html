@@ -7608,7 +7608,7 @@ function ImportExportModal({ section: initialSection = "import", onClose, proper
   );
 }
 
-function AdvisoryContractsView({ properties, onOpenProperty, supabaseClient, billingImport }) {
+function AdvisoryContractsView({ properties, onOpenProperty, supabaseClient, billingImport, switcher }) {
   // Revenue Tracker billing for each property, plus the contract checks.
   const billingByProp = useMemo(() => {
     const m = new Map();
@@ -7675,7 +7675,8 @@ function AdvisoryContractsView({ properties, onOpenProperty, supabaseClient, bil
   return (
     <div className="proto-dash">
       <div className="wrap" style={{ maxWidth: "none" }}>
-        <h1>Advisory Contracts</h1>
+        <h1>Contracts</h1>
+        {switcher}
         <p className="sub">Every Advisory Services contract — executed, plus drafts awaiting execution. Closed properties stay on the list. Select a property to open it.</p>
 
         <div className="kpis">
@@ -8575,7 +8576,7 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
 }
 
 // Portfolio-wide ISP contracts page, laid out like Advisory Contracts.
-function IspContractsView({ contracts, properties, supabaseClient, onChanged, onOpenProperty, onOpenLegislation, legisItems, userEmail, onApplyToTracker }) {
+function IspContractsView({ contracts, properties, supabaseClient, onChanged, onOpenProperty, onOpenLegislation, legisItems, userEmail, onApplyToTracker, switcher }) {
   const [tab, setTab] = useState("all");
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(null);
@@ -8597,7 +8598,8 @@ function IspContractsView({ contracts, properties, supabaseClient, onChanged, on
   return (
     <div className="proto-dash">
       <div className="wrap" style={{ maxWidth: "none" }}>
-        <h1>ISP Contracts</h1>
+        <h1>Contracts</h1>
+        {switcher}
         <p className="sub">Existing ISP agreements reviewed for due diligence, read from the uploaded PDFs, plus consulting agreements flagged on their properties. Select a contract to see every line item. Upload from Import / Export → Import → ISP Contracts, or from a property record.</p>
         <div className="kpis">
           <div className="kpi"><div className="v">{list.length}</div><div className="k">ISP contracts</div><div className="n">{propsCovered} properties</div></div>
@@ -11435,6 +11437,17 @@ function App() {
   const [search, setSearch] = useState("");
   const [showClosed, setShowClosed] = useState(false);
   const [showProspecting, setShowProspecting] = useState(true);
+  const [contractsMode, setContractsModeState] = useState(() => { try { return localStorage.getItem("contractsMode") === "isp" ? "isp" : "advisory"; } catch (e) { return "advisory"; } });
+  const setContractsMode = (m) => { setContractsModeState(m); try { localStorage.setItem("contractsMode", m); } catch (e) {} };
+  // Contracts page: switch between Advisory Service Contracts and ISP Contracts (like Client → Owner / Property).
+  const contractsSwitcher = (
+    <div className="toolbar" style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
+      <div className="nav" style={{ margin: 0 }} role="tablist" aria-label="Contract type">
+        <button className={contractsMode !== "isp" ? "on" : ""} onClick={() => setContractsMode("advisory")} role="tab" aria-selected={contractsMode !== "isp"}>Advisory Service Contracts</button>
+        <button className={contractsMode === "isp" ? "on" : ""} onClick={() => setContractsMode("isp")} role="tab" aria-selected={contractsMode === "isp"}>ISP Contracts</button>
+      </div>
+    </div>
+  );
   const [clientShowClosed, setClientShowClosedState] = useState(() => { try { return localStorage.getItem("clientShowClosed") === "1"; } catch (e) { return false; } });
   const setClientShowClosed = (v) => { setClientShowClosedState(v); try { localStorage.setItem("clientShowClosed", v ? "1" : "0"); } catch (e) {} };
   const [programPropertyId, setProgramPropertyId] = useState(null);
@@ -12038,7 +12051,7 @@ function App() {
               ["timeline", "Timeline", CheckSquare, "#7bd88a"],
               ["properties", "Client", Table2, "#a79cf0"],
               ["billing", "Billing", FileText, "#f4b45a"],
-              ["contracts", "Advisory Contracts", FileText, "#3cc8c0"],
+              ["contracts", "Contracts", FileText, "#3cc8c0"],
               ["map", "Client Map", MapIcon, "#5fb3f0"],
             ].map(([key, label, Icon, color]) => (
               <button key={key} className={view === key ? "active" : ""} style={{ "--hc": color }} onClick={() => { if (key === "billing") setBillingStatus("all"); setView(key); }} aria-current={view === key ? "page" : undefined}>
@@ -12083,15 +12096,15 @@ function App() {
       {view === "billing" && (
         <BillingView properties={visible} allProperties={properties} onOpenProperty={(p) => openProgram(p)} onSetPaymentStatus={setPaymentStatus} onExport={exportMasterFile} billingImport={billingImport} onSaveBillingImport={saveBillingImport} statusFilter={billingStatus} onStatusFilterChange={setBillingStatus} />
       )}
-      {view === "contracts" && (
-        <AdvisoryContractsView properties={properties} onOpenProperty={(p) => openProgram(p)} supabaseClient={supabaseClient} billingImport={billingImport} />
+      {view === "contracts" && contractsMode !== "isp" && (
+        <AdvisoryContractsView properties={properties} onOpenProperty={(p) => openProgram(p)} supabaseClient={supabaseClient} billingImport={billingImport} switcher={contractsSwitcher} />
+      )}
+      {view === "contracts" && contractsMode === "isp" && (
+        <IspContractsView contracts={ispContracts} properties={properties} supabaseClient={supabaseClient} onChanged={loadIspContracts} onOpenProperty={(p) => openProgram(p)} onOpenLegislation={openLegislation}
+          legisItems={(legislation && legislation.items) || LEGIS_SEED} userEmail={session && session.user ? session.user.email : null} onApplyToTracker={applyIspToTracker} switcher={contractsSwitcher} />
       )}
       {view === "map" && (
         <ClientMapView properties={properties} onOpenProperty={(p) => openProgram(p)} legislation={legislation} onSaveLegislation={saveLegislation} userEmail={session && session.user ? session.user.email : null} focus={mapFocus} />
-      )}
-      {view === "isp" && (
-        <IspContractsView contracts={ispContracts} properties={properties} supabaseClient={supabaseClient} onChanged={loadIspContracts} onOpenProperty={(p) => openProgram(p)} onOpenLegislation={openLegislation}
-          legisItems={(legislation && legislation.items) || LEGIS_SEED} userEmail={session && session.user ? session.user.email : null} onApplyToTracker={applyIspToTracker} />
       )}
       {rfpFor && properties.find((p) => p.code === rfpFor) && (
         <RfpDetailsModal property={properties.find((p) => p.code === rfpFor)} proposals={rfpProposals} documents={rfpDocs} supabaseClient={supabaseClient}
