@@ -565,6 +565,7 @@
 .proto-dash .ac-table th,.proto-dash .ac-table td{padding:9px 8px}
 .drop-hover{outline:2px dashed #4f8fe8 !important;outline-offset:-4px;background-color:rgba(79,143,232,0.08) !important}
 .proto-dash .ac-fit table{table-layout:auto}
+.clamp2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;line-height:1.35}
 .proto-dash .rfp-cmp th:first-child,.proto-dash .rfp-cmp td:first-child{position:sticky;left:0;z-index:1;background:var(--card2)}
 .proto-dash .rfp-cmp td{min-width:190px}
 .proto-dash .rfp-cmp td:first-child{min-width:140px}
@@ -8076,14 +8077,14 @@ function IspContractsTable({ rows, byCode, onOpen, showProperty, properties, sup
                 {showProperty && <td title={p ? `${p.code} ${p.name}` : c.property_name_in_contract || ""} style={{ minWidth: 150, maxWidth: 260}}>
                   {p ? <><span className="id">{p.code}</span> {p.name}</> : <span style={{ color: "#d3cdfa" }}>Unpaired{c.property_name_in_contract ? ` · ${c.property_name_in_contract}` : ""}</span>}</td>}
                 <td style={{ fontWeight: 600, minWidth: 110, maxWidth: 200 }}>{c.provider || (c.status === "done" ? "—" : c.file_name)}</td>
-                <td title={c.agreement_title || ""} style={{ minWidth: 100, maxWidth: 220}}>{c.agreement_type || c.agreement_title || "—"}</td>
+                <td title={c.agreement_title || ""} style={{ minWidth: 100, maxWidth: 200}}><div className="clamp2">{c.agreement_type || c.agreement_title || "—"}</div></td>
                 <td style={{ whiteSpace: "nowrap" }}><IspProgramCell c={c} supabaseClient={supabaseClient} onChanged={onChanged} /></td>
                 <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.executed_date)}</td>
-                <td style={{ minWidth: 70, maxWidth: 170 }}>{ispTerm(c)}</td>
+                <td title={c.term_text || ""} style={{ minWidth: 70, maxWidth: 190 }}><div className="clamp2">{ispTerm(c)}</div></td>
                 <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.expiration_date)}{mo != null && mo >= 0 && mo <= 12 && <span className="t-chip t-old" style={{ marginLeft: 6 }}>{mo} mo</span>}{mo != null && mo < 0 && <span className="t-chip" style={{ marginLeft: 6 }}>Expired</span>}</td>
-                <td title={c.escalator || ""} style={{ minWidth: 90, maxWidth: 180}}>{c.escalator_pct != null ? `${c.escalator_pct}%` : (c.escalator || "—")}</td>
-                <td title={c.rev_share || ""} style={{ minWidth: 90, maxWidth: 200}}>{c.rev_share || "—"}</td>
-                <td title={c.door_fee || ""} style={{ minWidth: 70, maxWidth: 160}}>{ispMoney(c.door_fee_amount) || c.door_fee || "—"}</td>
+                <td title={c.escalator || ""} style={{ minWidth: 90, maxWidth: 200}}><div className="clamp2">{c.escalator_pct != null ? `${c.escalator_pct}%` : (c.escalator || "—")}</div></td>
+                <td title={c.rev_share || ""} style={{ minWidth: 120, maxWidth: 260}}><div className="clamp2">{c.rev_share || "—"}</div></td>
+                <td title={c.door_fee || ""} style={{ minWidth: 100, maxWidth: 240}}><div className="clamp2">{ispMoney(c.door_fee_amount) || c.door_fee || "—"}</div></td>
                 <td>{c.contract_paper || "—"}</td>
                 <td><IspFlag v={c.anti_bulk} label={c.anti_bulk_detail || ""} /></td>
                 <td><IspFlag v={c.exclusive} label={c.exclusivity_detail || ""} /></td>
@@ -8114,9 +8115,9 @@ function IspConsultingTable({ rows, byCode, onOpen, showProperty, properties }) 
                 {showProperty && <td title={p ? `${p.code} ${p.name}` : ""} style={{ minWidth: 150, maxWidth: 260}}>{p ? <><span className="id">{p.code}</span> {p.name}</> : <span style={{ color: "#d3cdfa" }}>Unpaired{c.property_name_in_contract ? ` · ${c.property_name_in_contract}` : ""}</span>}</td>}
                 <td style={{ fontWeight: 600, minWidth: 110, maxWidth: 200 }}>{c.consultant || (c.status === "done" ? "—" : c.file_name)}</td>
                 <td title={c.agreement_title || ""} style={{ maxWidth: 200}}>{c.agreement_title || "—"}</td>
-                <td title={c.scope_summary || ""} style={{ maxWidth: 320}}>{c.scope_summary || "—"}</td>
+                <td title={c.scope_summary || ""} style={{ maxWidth: 320}}><div className="clamp2">{c.scope_summary || "—"}</div></td>
                 <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.executed_date)}</td>
-                <td style={{ minWidth: 70, maxWidth: 170 }}>{ispTerm(c)}</td>
+                <td title={c.term_text || ""} style={{ minWidth: 70, maxWidth: 190 }}><div className="clamp2">{ispTerm(c)}</div></td>
                 <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.expiration_date)}{mo != null && mo < 0 && <span className="t-chip" style={{ marginLeft: 6 }}>Expired</span>}{mo != null && mo >= 0 && <span className="t-chip t-old" style={{ marginLeft: 6 }}>Active</span>}</td>
                 <td><IspPairPill c={c} properties={properties || []} /></td>
                 <td><IspStatusPill c={c} /></td>
@@ -8642,7 +8643,7 @@ function IspPropertyContractsModal({ property, contracts, properties, supabaseCl
   const openC = open && mine.find((c) => c.id === open.id) || open;
   return (
     <div className="modal-overlay">
-      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "min(1640px, 98vw)", width: "98vw", maxHeight: "92vh", overflowY: "auto" }}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "99vw", width: "99vw", maxHeight: "94vh", overflowY: "auto" }}>
         <div className="modal-head">
           <div>
             <div className="field-label" style={{ margin: 0 }}>ISP Contracts — Due Diligence</div>
