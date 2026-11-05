@@ -588,6 +588,14 @@
 .proto-dash button.kpi:hover{border-color:var(--line2)}
 .proto-dash .kpi.sel{outline:2px solid var(--blue)}
 .proto-dash .phase-strip{grid-template-columns:repeat(auto-fit,minmax(112px,1fr))}
+.proto-dash .phase-buckets{display:grid;grid-template-columns:minmax(120px,0.6fr) 3fr 5fr;gap:10px;align-items:stretch}
+.proto-dash .phase-bucket{border:1px solid var(--line);border-radius:12px;padding:8px 10px 10px;background:rgba(255,255,255,0.02)}
+.proto-dash .phase-bucket-h{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:600;margin:0 2px 7px}
+.proto-dash .phase-bucket .kpis{grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px}
+.proto-dash .phase-bucket .kpi.zero .v{opacity:.35}
+.proto-dash .bar-bucket{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);font-weight:600;margin:10px 0 3px}
+.proto-dash .bar-bucket:first-of-type{margin-top:2px}
+@media (max-width:900px){.proto-dash .phase-buckets{grid-template-columns:1fr}}
 .proto-dash .kpi .v{font:600 24px var(--mono)}
 .proto-dash .kpi .k{font-size:12.5px;color:var(--mut);margin-top:2px}
 .proto-dash .kpi .n{font-size:12px;color:var(--dim);margin-top:2px}
@@ -1031,8 +1039,8 @@ const STAKEHOLDER_GROUPS = [
 const NOTE_TYPES = ["Update", "Risk", "Billing", "Decision", "Next step"];
 const STATUS_META = {
   "Prospecting": { color: "#D8D2C4", bg: "rgba(216,210,196,0.16)" },
-  "Advisory Contracts Drafted": { color: "#A78BFA", bg: "rgba(167,139,250,0.18)" },
-  "Planning": { color: "#92C9EB", bg: "rgba(146,201,235,0.18)" },
+  "Initial Advisory Contracting": { color: "#A78BFA", bg: "rgba(167,139,250,0.18)" },
+  "Advisory Amendment": { color: "#92C9EB", bg: "rgba(146,201,235,0.18)" },
   "On Track": { color: "#007B0C", bg: "rgba(0,123,12,0.16)" },
   "At Risk": { color: "#FFD972", bg: "rgba(255,217,114,0.2)" },
   "Blocked": { color: "#9E3B2E", bg: "rgba(158,59,46,0.18)" },
@@ -1047,12 +1055,15 @@ const STATUS_META = {
 // broken against a different background.
 const POV_STATUS_COLORS = {
   "Prospecting": { color: "#d6e0f3", bg: "#3a4a6e" },
-  "Advisory Contracts Drafted": { color: "#d3cdfa", bg: "#3d3670" },
+  "Initial Advisory Contracting": { color: "#d3cdfa", bg: "#3d3670" },
+  "Advisory Amendment": { color: "#d4ecfa", bg: "#2b4f66" },
   "On Track": { color: "#b8efc7", bg: "#1f5a34" },
   "At Risk": { color: "#ffd98a", bg: "#5a4a1a" },
   "Blocked": { color: "#ffc7c1", bg: "#6e2a28" },
 };
 const STATUS_OPTIONS = Object.keys(STATUS_META);
+// Former status names, still possibly saved as a manual status or in old exports.
+const LEGACY_STATUS_NAMES = { "Advisory Contracts Drafted": "Initial Advisory Contracting", "Planning": "Advisory Amendment" };
 
 const PRIORITY_META = {
   High: { color: "#DA7A62" },
@@ -1417,18 +1428,32 @@ function prospectingTemplate(done) {
     { text: "Gauge interest in a Due Diligence engagement", responsible: "Advisory Services", done },
     { text: "Tracker input — if no further discussion, enter owner and property details and mark the opportunity closed", responsible: "ROVR", done },
     { text: "Tracker input — if client wants to proceed, enter owner and property details in master tracker, send client intake form to client, request ISP contracts for each property", responsible: "Advisory Services", done },
-    { text: "Follow up as needed", responsible: "Advisory Services", done }
+    { text: "Follow up as needed", responsible: "Advisory Services", done },
+    { text: PROSPECT_TO_CONTRACTING_STEP, responsible: "Advisory Services", done }
   ];
 }
+// Phase trigger: checking this Prospecting to-do moves the client into
+// Initial Advisory Contracting (sets program.advisoryContractingStart).
+// It ticks itself once Ironclad shows a drafted or executed agreement.
+// Kept last in the list so older saved checklists can have it appended
+// without shifting the index of any to-do they already hold.
+const PROSPECT_TO_CONTRACTING_STEP = "Client agrees to proceed — move to Advisory Contracting";
+function withProspectStep(todos) {
+  const list = todos || [];
+  return list.some((t) => t.text === PROSPECT_TO_CONTRACTING_STEP) ? list : [...list, { text: PROSPECT_TO_CONTRACTING_STEP, responsible: "Advisory Services", done: false }];
+}
 
-// Canonical Planning checklist — the gap after Due Diligence completes but
-// before the Advisory contract gets executed (whether that gap is still
-// live/growing, or already resolved historically).
+// Canonical Advisory Amendment checklist (stored under "planning") — a
+// contracted phase is complete and the client hasn't contracted the next
+// one yet. The property leaves Advisory Amendment when an Ironclad import
+// brings in the next service's executed date.
 function planningTemplate(done) {
   return [
-    { text: "Confirm current status with client", responsible: "Advisory Services", done },
-    { text: "Follow up on outstanding next steps", responsible: "Advisory Services", done },
-    { text: "Re-engage / check in with client", responsible: "Advisory Services", done },
+    { text: "Review completed phase results with client", responsible: "Advisory Services", done },
+    { text: "Work with client to define the next phase of services", responsible: "Advisory Services", done },
+    { text: "NSC drafts advisory amendment for business unit review", responsible: "NSC", toggleWith: "Advisory Services", rounds: 0, approvalGate: true, done },
+    { text: "Amendment out for signatures", responsible: "Client Services", done },
+    { text: "Amendment executed in Ironclad; run Refresh Contract Data to move the property into its next contracted phase", responsible: "Advisory Services", done },
     { text: "Update program status in master tracker after each client touchpoint", responsible: "Advisory Services", done }
   ];
 }
@@ -1489,8 +1514,11 @@ function buildPhases(program) {
   // this phase. advisoryStart prefers the drafted date throughout this
   // function wherever the phase's actual start matters, since a
   // contract is always drafted before it's ever executed.
-  const hasAdvisory = !!program.advisoryContractExecuted || !!program.advisoryContractDrafted;
-  const advisoryStart = program.advisoryContractDrafted || program.advisoryContractExecuted;
+  const hasAdvisory = !!program.advisoryContractExecuted || !!program.advisoryContractDrafted || !!program.advisoryContractingStart;
+  // Advisory Contracting starts at the earliest of: the Prospecting
+  // trigger (client agreed to proceed), the Ironclad draft, the execution.
+  const advisoryStart = [program.advisoryContractingStart, program.advisoryContractDrafted, program.advisoryContractExecuted].filter(Boolean).sort()[0];
+  const prospectTodos = (data) => withProspectStep(data.todos).map((t) => (t.text === PROSPECT_TO_CONTRACTING_STEP && hasAdvisory) ? { ...t, done: true } : t);
 
   if (!hasAdvisory) {
     // Nothing contracted at all yet — still show a live, growing segment
@@ -1500,7 +1528,7 @@ function buildPhases(program) {
       const data = program.phaseData.prospecting || { done: false, todos: prospectingTemplate(false) };
       phases.push({
         key: "prospecting", label: "Prospecting", color: PROSPECTING_COLOR, hatchDark: true,
-        start: program.prospectStart, end, virtual: true, ...data
+        start: program.prospectStart, end, virtual: true, ...data, todos: prospectTodos(data)
       });
     }
     return phases;
@@ -1514,7 +1542,7 @@ function buildPhases(program) {
     const data = program.phaseData.prospecting || { done: false, todos: prospectingTemplate(false) };
     phases.push({
       key: "prospecting", label: "Prospecting", color: PROSPECTING_COLOR, hatchDark: true,
-      start: program.prospectStart, end: advisoryStart, virtual: true, ...data, done: true
+      start: program.prospectStart, end: advisoryStart, virtual: true, ...data, todos: prospectTodos(data), done: true
     });
   }
 
@@ -1555,7 +1583,7 @@ function buildPhases(program) {
   // Drafted but not executed: the property sits in its own "Advisory
   // Contracts Drafted" phase — none of the draft's proposed services
   // appear until the agreement is actually executed.
-  const advLabel = draftedOnly ? { label: "Advisory Contracts Drafted", color: STATUS_META["Advisory Contracts Drafted"].color, drafted: true } : {};
+  const advLabel = !program.advisoryContractExecuted ? { label: "Initial Advisory Contracting", color: STATUS_META["Initial Advisory Contracting"].color, drafted: draftedOnly } : {};
   phases.push({ ...advDef, ...advLabel, start: advisoryStart, end: advEnd, ...advData, todos: advTodos, done: optionsChosen, defaultDeadline: advCalcEnd, durationNote: durNote("advisory") });
 
   // Contracting & Legal and Post-Deployment Validation are never
@@ -1600,7 +1628,7 @@ function buildPhases(program) {
     if (ownDate && ownDate > sequentialStart) {
       const gapData = program.phaseData.planning || { done: false, todos: planningTemplate(false) };
       phases.push({
-        key: `planningGap_${optionKey}`, label: `Planning (awaiting ${label} contract)`, color: PLANNING_COLOR,
+        key: `planningGap_${optionKey}`, label: `Advisory Amendment (awaiting ${label} contract)`, color: PLANNING_COLOR,
         start: sequentialStart, end: ownDate, virtual: true, ...gapData, done: true,
       });
       return ownDate;
@@ -1718,10 +1746,28 @@ function buildPhases(program) {
   // genuine `done` state — actual checklist completion, or (for
   // Advisory specifically) optionsChosen — never inferred from what
   // else merely exists in the sequence.
+  // Due Diligence is its own contracted phase: it reads as done when its
+  // checklist is, or once work has visibly moved on to a later contracted
+  // service (one of its to-dos checked). Advisory itself no longer counts.
   const ddIndex = phases.findIndex((ph) => ph.key === "dueDiligence");
   if (ddIndex !== -1 && !phases[ddIndex].done) {
-    const hasLaterRealPhase = phases.slice(ddIndex + 1).some((ph) => !ph.virtual);
-    if (hasLaterRealPhase) phases[ddIndex].done = true;
+    const laterWorkStarted = phases.slice(ddIndex + 1).some((ph) => !ph.virtual && ph.key !== "advisory" && (ph.done || (ph.todos || []).some((t) => t.done)));
+    if (laterWorkStarted) phases[ddIndex].done = true;
+  }
+
+  // Advisory Amendment: every contracted phase is complete and the client
+  // hasn't contracted the next one (Ongoing never completes, so a property
+  // with Deployment stays in Ongoing Services). Shown as a live segment
+  // from the last completion to today; the next executed service in an
+  // Ironclad import ends it.
+  const real = phases.filter((ph) => !ph.virtual);
+  if (program.advisoryContractExecuted && optionsChosen && real.length && real.every((ph) => ph.done) && !real.some((ph) => ph.key === "ongoing")) {
+    const lastEnd = real.map((ph) => ph.end).filter(Boolean).sort().pop() || TODAY;
+    const amendData = program.phaseData.planning || { done: false, todos: planningTemplate(false) };
+    phases.push({
+      key: "planningGapLive", label: "Advisory Amendment", color: PLANNING_COLOR, virtual: true, amendment: true,
+      start: lastEnd, end: TODAY > lastEnd ? TODAY : lastEnd, ...amendData, done: false,
+    });
   }
 
   return phases;
@@ -1731,12 +1777,12 @@ function buildPhases(program) {
    override always wins if your team sets one. */
 function computeStatus(property) {
   const { program } = property;
-  if (program.manualStatus) return program.manualStatus;
+  if (program.manualStatus) return LEGACY_STATUS_NAMES[program.manualStatus] || program.manualStatus;
   // A contract workflow has been created (drafting started, per the real
   // Ironclad "Workflow Created Date") but hasn't reached execution yet —
   // a genuine pivot point distinct from either Prospecting or a fully
   // executed Advisory engagement.
-  if (program.advisoryContractDrafted && !program.advisoryContractExecuted) return "Advisory Contracts Drafted";
+  if ((program.advisoryContractDrafted || program.advisoryContractingStart) && !program.advisoryContractExecuted) return "Initial Advisory Contracting";
   if (!program.advisoryContractExecuted) return "Prospecting";
 
   const phases = buildPhases(program);
@@ -1744,9 +1790,10 @@ function computeStatus(property) {
   const today = parseDate(TODAY);
   const allDone = realPhases.every((ph) => ph.done);
   if (allDone) {
-    if (realPhases.length === 1) return "Planning"; // DD complete, Advisory contract not yet executed
-    if (realPhases.length === 2) return program.decision === "closed" ? "Closed" : "Planning";
     const last = realPhases[realPhases.length - 1];
+    // Every contracted phase finished and nothing further contracted:
+    // the client is back in Advisory Amendment.
+    if (!last || last.key !== "ongoing") return program.decision === "closed" ? "Closed" : "Advisory Amendment";
     // A phase can be checked off ahead of its own calculated schedule —
     // that shouldn't jump the status to Stabilized before today has
     // actually reached the point where Ongoing Management begins.
@@ -2031,23 +2078,52 @@ const CLIENTS = [];
 // itself now renders the real Advisory Service Contracting segment from
 // the drafted date onward, so this naturally reads that real phase's
 // own label without needing any special-case handling here.
+// Two phase buckets. Every property sits in exactly one stage:
+//  - Prospecting & Advisory Contracting: Prospecting → Initial Advisory
+//    Contracting (Prospecting trigger to-do, or an Ironclad draft) → and,
+//    between contracted phases, Advisory Amendment.
+//  - Contracted Services, in order: Due Diligence, RFP (incl. Incumbent
+//    Negotiation), Program Design (incl. Contracting & Legal), Deployment
+//    (incl. Post-Deployment Validation), Ongoing Services. Deployment and
+//    Ongoing are one contracted service, split by where the to-do work is.
+// Execution (Ironclad) drops the property into its first open contracted
+// phase. When a phase completes with nothing further contracted, it goes
+// back to Advisory Amendment until an Ironclad import brings the next
+// service's executed date.
+const PHASE_BUCKETS = [
+  { key: "advisoryContracting", label: "Prospecting & Advisory Contracting", stages: ["Prospecting", "Initial Advisory Contracting", "Advisory Amendment"] },
+  { key: "contractedServices", label: "Contracted Services", stages: ["Due Diligence", "RFP", "Program Design", "Deployment", "Ongoing Services"] },
+];
+const STAGE_COLORS = {
+  "Prospecting": "#D8D2C4", "Initial Advisory Contracting": "#A78BFA", "Advisory Amendment": "#92C9EB",
+  "Due Diligence": "#378ADD", "RFP": "#639922", "Program Design": "#EF9F27", "Deployment": "#D85A30", "Ongoing Services": "#B2B3B5",
+};
+const STAGE_BY_PHASE_KEY = {
+  dueDiligence: "Due Diligence", rfp: "RFP", incumbentNegotiation: "RFP",
+  programDesign: "Program Design", contractingLegal: "Program Design",
+  deployment: "Deployment", postDeploymentValidation: "Deployment", ongoing: "Ongoing Services",
+};
+function phaseBucketOf(stage) { const b = PHASE_BUCKETS.find((x) => x.stages.includes(stage)); return b ? b.label : ""; }
 function currentPhaseGroupLabel(property) {
-  const phases = buildPhases(property.program);
-  // Every property in this system exists for a genuine reason, even if
-  // no prospect start date happens to be on file — there's no real
-  // "nothing has happened yet" state, so this collapses into
-  // Prospecting rather than a separate, ambiguous bucket. Matches
-  // computeStatus, which already treats this exact case as Prospecting.
-  if (phases.length === 0) return "Prospecting";
-  const current = phases.find((ph) => !ph.done) || phases[phases.length - 1];
-  if (current.virtual) return current.key === "prospecting" ? "Prospecting" : "Planning";
-  return current.label;
+  const program = property.program || {};
+  if (!program.advisoryContractExecuted) {
+    return (program.advisoryContractDrafted || program.advisoryContractingStart) ? "Initial Advisory Contracting" : "Prospecting";
+  }
+  const phases = buildPhases(program);
+  const adv = phases.find((ph) => ph.key === "advisory");
+  // Executed, but no service selected on it yet.
+  if (adv && !adv.done) return "Initial Advisory Contracting";
+  const current = phases.find((ph) => !ph.virtual && !ph.done && STAGE_BY_PHASE_KEY[ph.key]);
+  if (current) return STAGE_BY_PHASE_KEY[current.key];
+  return "Advisory Amendment";
 }
 
 // Natural phase sequence, used to sort Group-by-Phase lanes in the order
 // work actually flows rather than alphabetically.
-const PHASE_GROUP_ORDER = [
-  "Prospecting", "Advisory Contracts Drafted", "Due Diligence", "Planning",
+const PHASE_GROUP_ORDER = PHASE_BUCKETS.flatMap((b) => b.stages);
+// The detailed phase order inside a property's timeline (checklist labels).
+const DETAIL_PHASE_ORDER = [
+  "Prospecting", "Initial Advisory Contracting", "Due Diligence", "Advisory Amendment",
   "Additional Services", "RFP Track", "Incumbent Negotiation Track", "Program Design & Contracting",
   "Deployment", "Post-Deployment Validation", "Ongoing Management"
 ];
@@ -2080,8 +2156,8 @@ function collectCompletedNotesForProperty(property) {
     }
   });
   return entries.sort((a, b) => {
-    const ai = PHASE_GROUP_ORDER.indexOf(a.phaseLabel);
-    const bi = PHASE_GROUP_ORDER.indexOf(b.phaseLabel);
+    const ai = DETAIL_PHASE_ORDER.indexOf(a.phaseLabel);
+    const bi = DETAIL_PHASE_ORDER.indexOf(b.phaseLabel);
     return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi);
   });
 }
@@ -2091,6 +2167,8 @@ function collectCompletedNotesForProperty(property) {
 // two virtual labels (Prospecting, Planning) reuse their STATUS_META
 // color, since those are also real statuses elsewhere in the app.
 function colorForPhaseLabel(label) {
+  if (STAGE_COLORS[label]) return STAGE_COLORS[label];
+  if (LEGACY_STATUS_NAMES[label]) return STAGE_COLORS[LEGACY_STATUS_NAMES[label]];
   if (STATUS_META[label]) return STATUS_META[label].color;
   const def = PHASE_DEFS.find((d) => d.label === label);
   return def ? def.color : "#B2B3B5";
@@ -2144,48 +2222,33 @@ function PhaseLegend({ groupBy, setGroupBy, isolatedKey, setIsolatedKey, view, s
     }
   };
 
-  const ongoingDef = PHASE_DEFS.find((d) => d.key === "ongoing");
   return (
     <>
       <div className="legend">
-        {PHASE_DEFS.map((d) => (
-          (d.key === "ongoing" || d.key === "contractingLegal") ? null : (
-            <button
-              className={`legend-item legend-item-clickable${isActive(d.label) ? " legend-item-active" : ""}`}
-              key={d.key}
-              onClick={() => handleClick(d.label)}
-              title={isActive(d.label) ? "Click to show all phases again" : `Click to isolate ${d.label}`}
-            >
-              <span className="legend-swatch" style={{ background: d.color }} />
-              {d.label}
-            </button>
-          )
+        {PHASE_BUCKETS.map((bk) => (
+          <React.Fragment key={bk.key}>
+            <span className="legend-item" style={{ fontWeight: 600, opacity: 0.75, textTransform: "uppercase", fontSize: 11, letterSpacing: ".05em" }}>{bk.label}</span>
+            {bk.stages.map((s) => (
+              <button
+                className={`legend-item legend-item-clickable${isActive(s) ? " legend-item-active" : ""}`}
+                key={s}
+                onClick={() => handleClick(s)}
+                title={isActive(s) ? "Click to show all phases again" : `Click to isolate ${s}`}
+              >
+                <span className="legend-swatch" style={{ background: STAGE_COLORS[s] }} />
+                {s}
+              </button>
+            ))}
+          </React.Fragment>
         ))}
-        <button
-          className={`legend-item legend-item-clickable${isActive(ongoingDef.label) ? " legend-item-active" : ""}`}
-          key="ongoing"
-          onClick={() => handleClick(ongoingDef.label)}
-          title={isActive(ongoingDef.label) ? "Click to show all phases again" : `Click to isolate ${ongoingDef.label}`}
-        >
-          <span className="legend-swatch" style={{ background: ongoingDef.color }} />
-          {ongoingDef.label}
-        </button>
       </div>
       <div className="legend-caption">
-        <button
-          className={`legend-caption-item${isActive("Prospecting") ? " legend-item-active" : ""}`}
-          onClick={() => handleClick("Prospecting")}
-          title={isActive("Prospecting") ? "Click to show all phases again" : "Click to isolate Prospecting"}
-        >
-          <span className="legend-hatch-sample legend-hatch-stucco" /> Prospecting — pre-agreement time, before or leading up to Due Diligence
-        </button>
-        <button
-          className={`legend-caption-item${isActive("Planning") ? " legend-item-active" : ""}`}
-          onClick={() => handleClick("Planning")}
-          title={isActive("Planning") ? "Click to show all phases again" : "Click to isolate Planning"}
-        >
-          <span className="legend-hatch-sample legend-hatch-sky" /> Planning — waiting on the Advisory contract after Due Diligence
-        </button>
+        <span className="legend-caption-item">
+          <span className="legend-hatch-sample legend-hatch-stucco" /> Prospecting — pre-agreement time, before Advisory Contracting
+        </span>
+        <span className="legend-caption-item">
+          <span className="legend-hatch-sample legend-hatch-sky" /> Advisory Amendment — a contracted phase is done and the next one isn't contracted yet
+        </span>
       </div>
     </>
   );
@@ -4030,10 +4093,8 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
       const label = currentPhaseGroupLabel(p);
       counts[label] = (counts[label] || 0) + 1;
     });
-    const shorten = (l) => l.replace("Program Design & Contracting", "Program Design").replace("Post-Deployment Validation", "Post-Deployment");
     return PHASE_GROUP_ORDER
-      .filter((label) => counts[label])
-      .map((label) => ({ label, displayLabel: shorten(label), count: counts[label], color: colorForPhaseLabel(label) }));
+      .map((label) => ({ label, displayLabel: label, bucket: phaseBucketOf(label), count: counts[label] || 0, color: colorForPhaseLabel(label) }));
   }, [properties]);
 
   const statusCounts = useMemo(() => {
@@ -4185,13 +4246,20 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
         <h1>Portfolio Overview</h1>
         <p className="sub">{properties.length} properties. Click any phase, status, or card to filter everything on this page.</p>
 
-        <div className="kpis phase-strip">
+        <div className="phase-buckets">
           <div className="kpi"><div className="v">{properties.length}</div><div className="k">Properties shown</div></div>
-          {phaseCounts.map((ph) => (
-            <button key={ph.label} className="kpi" onClick={() => onNavigate("phase", ph.label)} title={`Open ${ph.label}`}>
-              <div className="v" style={{ color: ph.color }}>{ph.count}</div>
-              <div className="k">{ph.displayLabel || ph.label}</div>
-            </button>
+          {PHASE_BUCKETS.map((b) => (
+            <div className="phase-bucket" key={b.key}>
+              <div className="phase-bucket-h">{b.label} · {phaseCounts.filter((ph) => ph.bucket === b.label).reduce((s, ph) => s + ph.count, 0)}</div>
+              <div className="kpis">
+                {phaseCounts.filter((ph) => ph.bucket === b.label).map((ph) => (
+                  <button key={ph.label} className={`kpi${ph.count ? "" : " zero"}`} onClick={() => onNavigate("phase", ph.label)} title={`Open ${ph.label}`}>
+                    <div className="v" style={{ color: ph.color }}>{ph.count}</div>
+                    <div className="k">{ph.label}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
 
@@ -4272,14 +4340,15 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
         <div className="row2">
           <div className="card">
             <h3>By Phase</h3>
-            {phaseCounts.map((ph) => {
+            {phaseCounts.map((ph, i) => {
               const maxCount = Math.max(...phaseCounts.map((x) => x.count), 1);
+              const head = (i === 0 || phaseCounts[i - 1].bucket !== ph.bucket) ? <div className="bar-bucket" key={`h-${ph.bucket}`}>{ph.bucket}</div> : null;
               return (
-                <button key={ph.label} className={`bar-row${ph.count ? "" : " zero"}`} onClick={() => onNavigate("phase", ph.label)} title={`Open ${ph.label}`}>
+                <React.Fragment key={ph.label}>{head}<button key={ph.label} className={`bar-row${ph.count ? "" : " zero"}`} onClick={() => onNavigate("phase", ph.label)} title={`Open ${ph.label}`}>
                   <span><span className="dot" style={{ background: ph.color }} />{ph.displayLabel || ph.label}</span>
                   <div className="track"><i style={{ width: (ph.count / maxCount) * 100 + "%", background: ph.color }} /></div>
                   <b>{ph.count}</b>
-                </button>
+                </button></React.Fragment>
               );
             })}
           </div>
@@ -5067,7 +5136,7 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
             return (
               <div key={optionKey} className="contract-date-row" style={executedDate ? { borderColor: "#007B0C" } : undefined}>
                 <span className="field-label">{label}</span>
-                <span className="mono" style={draftOnly ? { color: STATUS_META["Advisory Contracts Drafted"].color } : undefined}>
+                <span className="mono" style={draftOnly ? { color: STATUS_META["Initial Advisory Contracting"].color } : undefined}>
                   {executedDate ? `Executed ${fmtDate(executedDate)}` : draftOnly ? "In draft — not executed" : "Not contracted"}
                 </span>
               </div>
@@ -6044,6 +6113,15 @@ function parseIroncladAllStatusSheet(workbook) {
     "Formal RFP", "Contract Support & Program Design", "Program Deployment & Ongoing Management"];
   if (!required.every((col) => col in idx)) return { selections: {}, executed: {}, draftedOnly: {} };
 
+  // The agreement's executed date: an executed/signed date column when the
+  // export has one, otherwise the Commencement Date.
+  const execCol = ["Executed Date", "Execution Date", "Date Executed", "Signed Date", "Fully Executed Date"].find((c) => c in idx);
+  const rowExecRaw = (r) => (execCol && r[idx[execCol]] != null && r[idx[execCol]] !== "") ? r[idx[execCol]] : (idx["Commencement Date"] !== undefined ? r[idx["Commencement Date"]] : null);
+  // Oldest agreement first, so the original contract and each later
+  // amendment give every service the date it was actually executed.
+  const body = rows.slice(1).map((r) => ({ r, d: excelCellDate(rowExecRaw(r)) || "9999" }))
+    .sort((a, b) => a.d.localeCompare(b.d)).map((x) => x.r);
+  rows.splice(1, rows.length - 1, ...body);
   const selections = {};
   const executed = {};
   const draftedOnly = {};
@@ -6059,7 +6137,7 @@ function parseIroncladAllStatusSheet(workbook) {
     const key = SMART_IMPORT_ALIASES[propName.toLowerCase()] || propName.toLowerCase();
 
     const contractStatus = r[idx["Contract Status"]];
-    const commencementRaw = idx["Commencement Date"] !== undefined ? r[idx["Commencement Date"]] : null;
+    const commencementRaw = rowExecRaw(r);
     const createdRaw = idx["Workflow Created Date"] !== undefined ? r[idx["Workflow Created Date"]] : null;
     const created = createdRaw ? excelCellDate(createdRaw) : null;
     const commencementDate = contractStatus === "active" ? excelCellDate(commencementRaw) : null;
@@ -10339,7 +10417,7 @@ const MAP_ZIPS = {
 };
 const MAP_CITIES = { "tuxedo|NY":[41.1940,-74.1840], "darien|CT":[41.0787,-73.4693] };
 const MAP_STATES = {AL:[32.8,-86.8],AK:[64.7,-152],AZ:[34.3,-111.7],AR:[34.9,-92.4],CA:[37.2,-119.5],CO:[39,-105.5],CT:[41.6,-72.7],DE:[39,-75.5],DC:[38.9,-77.03],FL:[28.6,-82.4],GA:[32.7,-83.4],HI:[20.8,-156.3],ID:[44.4,-114.6],IL:[40,-89.2],IN:[39.9,-86.3],IA:[42.1,-93.5],KS:[38.5,-98.4],KY:[37.5,-85.3],LA:[31,-92],ME:[45.4,-69.2],MD:[39,-76.8],MA:[42.3,-71.8],MI:[44.3,-85.4],MN:[46.3,-94.3],MS:[32.7,-89.7],MO:[38.4,-92.5],MT:[47,-109.6],NE:[41.5,-99.8],NV:[39.3,-116.6],NH:[43.7,-71.6],NJ:[40.1,-74.7],NM:[34.4,-106.1],NY:[42.9,-75.5],NC:[35.6,-79.4],ND:[47.5,-100.5],OH:[40.3,-82.8],OK:[35.6,-97.5],OR:[43.9,-120.6],PA:[40.9,-77.8],RI:[41.7,-71.5],SC:[33.9,-80.9],SD:[44.4,-100.2],TN:[35.9,-86.4],TX:[31.5,-99.3],UT:[39.3,-111.7],VT:[44.1,-72.7],VA:[37.5,-78.8],WA:[47.4,-120.5],WV:[38.6,-80.6],WI:[44.6,-89.9],WY:[43,-107.5]};
-const MAP_HIDDEN_STATUSES = ["Prospecting", "Advisory Contracts Drafted", "Closed"];
+const MAP_HIDDEN_STATUSES = ["Prospecting", "Initial Advisory Contracting", "Closed"];
 
 function mapZipCache() { try { return JSON.parse(localStorage.getItem("clientMapZips") || "{}"); } catch (e) { return {}; } }
 function mapSaveZipCache(c) { try { localStorage.setItem("clientMapZips", JSON.stringify(c)); } catch (e) {} }
@@ -11832,7 +11910,8 @@ function App() {
     const storageKey = storageKeyFor(phaseKey);
     setProperties((prev) => prev.map((p) => {
       if (p.id !== propertyId) return p;
-      const current = p.program.phaseData[storageKey] || { done: false, todos: defaultTodosFor(storageKey) };
+      const stored = p.program.phaseData[storageKey] || { done: false, todos: defaultTodosFor(storageKey) };
+      const current = storageKey === "prospecting" ? { ...stored, todos: withProspectStep(stored.todos) } : stored;
       const todo = current.todos[todoIdx];
       if (!todo) return p; // stale index — never crash the tracker over it
       const newDone = !todo.done;
@@ -11844,6 +11923,8 @@ function App() {
       if (phaseKey === "rfp" && todo.text === "Client selects vendor") patch.vendorSelectedDate = newDone ? TODAY : null;
       if (phaseKey === "incumbentNegotiation" && todo.text === "Client approves negotiated terms or elects to move to RFP") patch.vendorSelectedDate = newDone ? TODAY : null;
       if (phaseKey === "dueDiligence" && todo.text === "Present findings to client") patch.ddFindingsPresentedDate = newDone ? TODAY : null;
+      // Phase trigger: Prospecting → Initial Advisory Contracting.
+      if (storageKey === "prospecting" && todo.text === PROSPECT_TO_CONTRACTING_STEP) patch.advisoryContractingStart = newDone ? (p.program.advisoryContractingStart || TODAY) : null;
 
       let phaseUpdate = { todos: newTodos };
       if (AUTO_COMPLETE_KEYS.includes(storageKey)) {
