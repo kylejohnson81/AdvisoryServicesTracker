@@ -8075,8 +8075,8 @@ function IspContractsTable({ rows, byCode, onOpen, showProperty, properties, sup
             return (
               <tr key={c.id} className="click" onClick={() => onOpen(c)} style={{ cursor: "pointer" }}>
                 {showProperty && <td title={p ? `${p.code} ${p.name}` : c.property_name_in_contract || ""} style={{ minWidth: 150, maxWidth: 260}}>
-                  {p ? <><span className="id">{p.code}</span> {p.name}</> : <span style={{ color: "#d3cdfa" }}>Unpaired{c.property_name_in_contract ? ` · ${c.property_name_in_contract}` : ""}</span>}</td>}
-                <td style={{ fontWeight: 600, minWidth: 110, maxWidth: 200 }}>{c.provider || (c.status === "done" ? "—" : c.file_name)}</td>
+                  <div className="clamp2">{p ? <><span className="id">{p.code}</span> {p.name}</> : <span style={{ color: "#d3cdfa" }}>Unpaired{c.property_name_in_contract ? ` · ${c.property_name_in_contract}` : ""}</span>}</div></td>}
+                <td title={c.provider || ""} style={{ fontWeight: 600, minWidth: 110, maxWidth: 200 }}><div className="clamp2">{c.provider || (c.status === "done" ? "—" : c.file_name)}</div></td>
                 <td title={c.agreement_title || ""} style={{ minWidth: 100, maxWidth: 200}}><div className="clamp2">{c.agreement_type || c.agreement_title || "—"}</div></td>
                 <td style={{ whiteSpace: "nowrap" }}><IspProgramCell c={c} supabaseClient={supabaseClient} onChanged={onChanged} /></td>
                 <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.executed_date)}</td>
