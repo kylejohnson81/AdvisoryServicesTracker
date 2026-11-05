@@ -9805,7 +9805,7 @@ function ChangeLogView({ rows, loading, error, onRefresh, properties, setPropert
     if (!supabaseClient) return;
     const need = new Set();
     shown.forEach((r) => {
-      if (r.action === "flag" && r.field === "Location" && !r.reviewed && r.details && Array.isArray(r.details.candidates)) {
+      if (r.action === "flag" && (r.field === "Location" || r.field === "New property") && !r.reviewed && r.details && Array.isArray(r.details.candidates)) {
         r.details.candidates.forEach((c) => { if (c && !(c in masterCache)) need.add(c); });
       }
     });
@@ -9924,6 +9924,58 @@ function ChangeLogView({ rows, loading, error, onRefresh, properties, setPropert
     await patchRow(row.id, { reviewed: true, reviewed_by: me, reviewed_at: now(), applied_at: now(), applied_by: me, apply_result: "Not in master", undo });
   });
 
+  // New-property proposals from the notes digest (action "flag", field "New property",
+  // property_code "NEW"). Nothing exists in the tracker until one of these is chosen.
+  const addProspect = (row, yardi) => run(row, async () => {
+    const d = row.details || {}; const pr = d.proposed || {};
+    let m = null;
+    if (yardi) {
+      m = masterCache[yardi];
+      if (!m) {
+        const { data, error: e } = await supabaseClient.from("master_properties").select("*").eq("yardi_code", yardi).eq("is_active", true).maybeSingle();
+        if (e) throw new Error(e.message);
+        m = data;
+      }
+      if (!m) throw new Error(`${yardi} is no longer a current master record`);
+    }
+    const { data: code, error: ce } = await supabaseClient.rpc("next_property_code");
+    if (ce || !code) throw new Error(`couldn't get a new property code${ce ? `: ${ce.message}` : ""}`);
+    const saidName = pr.name || row.property_name || "New property";
+    const name = (m && m.name) || saidName;
+    const stub = newPropertyStub(name, code);
+    const attributes = { ...stub.program.attributes };
+    [["Address", pr.address], ["City", pr.city], ["State", pr.state], ["Zip", pr.zip], ["Units", pr.units]].forEach(([k, v]) => { if (v !== null && v !== undefined && v !== "") attributes[k] = v; });
+    if (m) CL_MASTER_FIELDS.forEach(([k, col]) => { const v = m[col]; if (v !== null && v !== undefined && v !== "") attributes[k] = col === "units" ? Number(v) : String(v); });
+    attributes.Client = pr.client || (m && m.client) || "—";
+    attributes["Master Status"] = m ? "Linked" : "Not in master";
+    attributes["Source of Record"] = m ? "Master" : "Manual";
+    if (m && clNorm(saidName) !== clNorm(name)) attributes["Previous Names"] = saidName;
+    const date = d.digest_date || TODAY;
+    const program = { ...stub.program, attributes, selectedOptions: {}, prospectStart: date };
+    if (d.note) {
+      const entry = { key: `${code}|CD${date.replace(/-/g, "")}`, date, note: d.note, entry: 1, phase: "Prospecting", source: "Claude Digest" };
+      program.notesLog = [entry]; program.latestNote = entry;
+    }
+    setProperties((prev) => [...prev, { ...stub, program }]);
+    await logRows([{ property_code: code, property_name: name, action: "add", field: "New property", old_value: null, new_value: code, reason: `Added as a prospect from the ${row.source || "digest"} proposal${m ? `; linked to master ${m.yardi_code}` : "; not in master"}` }]);
+    await patchRow(row.id, { reviewed: true, reviewed_by: me, reviewed_at: now(), applied_at: now(), applied_by: me, apply_result: `Added as ${code}`, undo: { kind: "created", code, message: `Added ${code} ${name}` } });
+  });
+  // The proposal is really an existing property: keep the name as said so the digest
+  // matches it from now on, and carry the digest's note across.
+  const proposalIsExisting = (row, code) => run(row, async () => {
+    const p = byCode[code]; if (!p) throw new Error(`${code} isn't in the tracker`);
+    const saidName = (row.details && row.details.proposed && row.details.proposed.name) || row.property_name || "";
+    const prev = (p.program.attributes || {})["Previous Names"] || "";
+    const known = [p.name, ...String(prev).split(";")].map(clNorm);
+    const names = saidName && !known.includes(clNorm(saidName)) ? (prev ? `${prev}; ${saidName}` : saidName) : null;
+    const text = (row.details && row.details.note) || row.reason || "";
+    const note = text ? closeNote(p, text) : null;
+    const undo = { ...snapshot(p, ["Previous Names"]), ...(note ? { removeNoteKey: note.key } : {}), message: `Matched to ${code} ${p.name}` };
+    updateProgram(code, (pp) => ({ program: { ...pp.program, attributes: { ...(pp.program.attributes || {}), ...(names ? { "Previous Names": names } : {}) }, ...(note ? { notesLog: [...(Array.isArray(pp.program.notesLog) ? pp.program.notesLog : []), note] } : {}) } }));
+    if (names) await logRows([{ property_code: code, property_name: p.name, action: "update", field: "Previous Names", old_value: prev || null, new_value: names, reason: `Digest proposal "${saidName}" matched to this property in the Change Log` }]);
+    await patchRow(row.id, { reviewed: true, reviewed_by: me, reviewed_at: now(), applied_at: now(), applied_by: me, apply_result: `Already ${code}`, undo });
+  });
+
   const applyBall = (row) => run(row, async () => {
     const p = byCode[row.property_code];
     const ev = clEvaluateBall(row, p);
@@ -10002,7 +10054,7 @@ function ChangeLogView({ rows, loading, error, onRefresh, properties, setPropert
     await patchRow(row.id, { reviewed: true, reviewed_by: me, reviewed_at: now(), applied_at: now(), applied_by: me, apply_result: `Merged ${O.code} into ${K.code}`, undo });
   });
 
-  const canUndo = (r) => r.undo && r.apply_result !== "undone" && (r.undo.kind === "program" || r.undo.kind === "merge" || (r.undo.storageKey && r.undo.idx !== undefined && r.undo.todoBefore));
+  const canUndo = (r) => r.undo && r.apply_result !== "undone" && (r.undo.kind === "program" || r.undo.kind === "merge" || r.undo.kind === "created" || (r.undo.storageKey && r.undo.idx !== undefined && r.undo.todoBefore));
   const undoRow = (row) => run(row, async () => {
     const u = row.undo || {};
     if (u.kind === "merge") {
@@ -10014,7 +10066,15 @@ function ChangeLogView({ rows, loading, error, onRefresh, properties, setPropert
       await patchRow(row.id, { reviewed: false, reviewed_by: null, reviewed_at: null, apply_result: "undone" });
       return;
     }
-    const p = byCode[row.property_code]; if (!p) throw new Error("property not found");
+    if (u.kind === "created") {
+      // Properties can't be deleted, so undoing an add closes the record and reopens the proposal.
+      const C = byCode[u.code]; if (!C) throw new Error("property not found");
+      updateProgram(C.code, (pp) => ({ program: { ...pp.program, manualStatus: "Closed", closedReason: "Added in error (undone in the Change Log)" } }));
+      await logRows([{ property_code: C.code, property_name: C.name, action: "info", field: "Status", old_value: null, new_value: "Closed", reason: "Add undone from the Change Log; proposal reopened" }]);
+      await patchRow(row.id, { reviewed: false, reviewed_by: null, reviewed_at: null, apply_result: "undone" });
+      return;
+    }
+    const p = byCode[u.code || row.property_code]; if (!p) throw new Error("property not found");
     if (u.kind === "program") {
       updateProgram(p.code, (pp) => {
         const attrs = { ...(pp.program.attributes || {}) };
@@ -10066,7 +10126,22 @@ function ChangeLogView({ rows, loading, error, onRefresh, properties, setPropert
     const out = [];
     if (r.reviewed) {
       if (canUndo(r)) out.push(<Btn key="undo" onClick={() => { if (window.confirm(`Undo: ${(r.undo && r.undo.message) || r.apply_result}?`)) undoRow(r); }}>Undo</Btn>);
-      out.push(<Btn key="reopen" onClick={() => reopen(r)}>Reopen</Btn>);
+      if (!(r.undo && r.undo.kind === "created" && r.apply_result !== "undone")) out.push(<Btn key="reopen" onClick={() => reopen(r)}>Reopen</Btn>);
+      return out;
+    }
+    if (r.action === "flag" && r.field === "New property") {
+      const d = r.details || {};
+      const nm = (d.proposed && d.proposed.name) || r.property_name;
+      const cands = Array.isArray(d.candidates) ? d.candidates.filter(Boolean) : [];
+      const dups = Array.isArray(d.duplicates) ? d.duplicates.filter((x) => x && x.code) : [];
+      cands.forEach((c) => {
+        const gone = masterCache[c] === null;
+        out.push(<Btn key={`a-${c}`} primary={cands.length === 1} disabled={gone} onClick={() => { if (window.confirm(`Add ${nm} as a new prospect linked to master ${c} (${label(c)})? It gets a new P-code.`)) addProspect(r, c); }}>{gone ? `${c} no longer in master` : `Add as prospect, linked to ${c}`}</Btn>);
+      });
+      out.push(<Btn key="a-new" primary={cands.length === 0} onClick={() => { if (window.confirm(`Add ${nm} as a new prospect, not in master? It gets a new P-code.`)) addProspect(r, null); }}>{cands.length ? "Add as prospect, not in master" : "Add as prospect"}</Btn>);
+      dups.forEach((x) => { if (byCode[x.code]) out.push(<Btn key={`d-${x.code}`} onClick={() => { if (window.confirm(`Treat ${nm} as ${x.code} ${byCode[x.code].name}? No new property is added; the digest's note goes on ${x.code}.`)) proposalIsExisting(r, x.code); }}>Already {x.code}</Btn>); });
+      out.push(<Btn key="d-other" onClick={() => { const v = window.prompt(`Which property is ${nm}? Enter its P-code, e.g. P-102.`); if (!v) return; const m = String(v).trim().toUpperCase().match(/^P-?(\d+)$/); const code = m ? `P-${m[1].padStart(3, "0")}` : ""; if (!byCode[code]) { setMsg({ id: r.id, text: `${v} isn't in the tracker.` }); return; } proposalIsExisting(r, code); }}>{dups.length ? "Already another P-code" : "Already in the tracker"}</Btn>);
+      out.push(<Btn key="dis" onClick={() => markReviewed(r, "Dismissed")}>Dismiss</Btn>);
       return out;
     }
     if (r.action === "flag" && r.field === "Client" && p) {
@@ -10144,6 +10219,13 @@ function ChangeLogView({ rows, loading, error, onRefresh, properties, setPropert
       const d = r.details; const K = byCode[d.keep], O = byCode[d.other];
       const desc = (x) => { if (!x) return "not in the tracker"; const a = x.program.attributes || {}; return `${x.code} ${x.name} — ${[a.Client, a.Address, a.City, a.State, a.Units ? `${a.Units} units` : null, x.program.advisoryContractExecuted ? `executed ${x.program.advisoryContractExecuted}` : x.program.advisoryContractDrafted ? `drafted ${x.program.advisoryContractDrafted}` : null, x.program.manualStatus === "Closed" ? "Closed" : null].filter(Boolean).join(" · ")}`; };
       return `${d.confidence || ""} confidence: ${(d.reasons || []).join("; ")}. ${desc(K)}  |  ${desc(O)}`;
+    }
+    if (r.action === "flag" && r.field === "New property") {
+      const d = r.details || {};
+      const cands = Array.isArray(d.candidates) ? d.candidates.filter(Boolean) : [];
+      const dups = Array.isArray(d.duplicates) ? d.duplicates.filter((x) => x && x.code) : [];
+      const master = cands.length ? `Master match: ${cands.map((c) => `${c} — ${label(c)}`).join("; ")}.` : "No master match; it would be added as not in master.";
+      return `${master} ${dups.length ? `Possible duplicates: ${dups.map((x) => `${x.code} ${x.name || ""}${x.why ? ` (${x.why})` : ""}`).join("; ")}.` : "No likely duplicates in the tracker."}`;
     }
     if (r.action === "flag" && r.field === "Location" && r.details && Array.isArray(r.details.candidates) && r.details.candidates.length) {
       return "Candidates: " + r.details.candidates.filter(Boolean).map((c) => `${c} — ${label(c)}`).join("; ");
