@@ -563,6 +563,7 @@
 .proto-dash .banner{background:#33290a;color:#ffd98a;font-size:13px;padding:8px 20px;border-bottom:1px solid #5a4a1a}
 .proto-dash .wrap{max-width:1240px;margin:0 auto;padding:18px 20px 60px}
 .proto-dash .ac-table th,.proto-dash .ac-table td{padding:9px 8px}
+.drop-hover{outline:2px dashed #4f8fe8 !important;outline-offset:-4px;background-color:rgba(79,143,232,0.08) !important}
 .proto-dash .ac-fit table{table-layout:auto}
 .proto-dash .rfp-cmp th:first-child,.proto-dash .rfp-cmp td:first-child{position:sticky;left:0;z-index:1;background:var(--card2)}
 .proto-dash .rfp-cmp td{min-width:190px}
@@ -8291,7 +8292,7 @@ function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCo
       <input ref={fileRef} type="file" accept="application/pdf,.pdf" multiple style={{ display: "none" }} onChange={onFiles} />
       <button className="btn-primary" disabled={busy} onClick={() => fileRef.current && fileRef.current.click()}>{busy ? "Working…" : `Upload ${ISP_KINDS[kind].one} PDFs…`}</button>
       {counts.total > 0 && <span style={{ marginLeft: 10, fontSize: 13, opacity: 0.85 }}>{counts.done} of {counts.total} done{counts.pick ? ` · ${counts.pick} need a property` : ""}{counts.skip ? ` · ${counts.skip} duplicate${counts.skip === 1 ? "" : "s"} skipped` : ""}{counts.err ? ` · ${counts.err} failed` : ""}{counts.wait ? ` · ${counts.wait} in progress` : ""}</span>}
-      <div className="dim" style={{ fontSize: 11.5, marginTop: 6 }}>Select as many PDFs as you like; they're read {ISP_CONCURRENCY} at a time, and files already in the repository are skipped. To keep reads small, pages with a text layer go as text, scanned pages as reduced images, and consulting agreements send only their first 3 and last 2 pages. ISP agreements get the full due diligence read; consulting agreements get a light read (consultant, owner, dates, term, scope) to pair and flag them. Each PDF is read by Claude, then paired to its tracker property using the name, street address, city, state, ZIP, units and owner entity in the contract. A clear match pairs automatically; otherwise you confirm the recommended property or pick the right one. Conflicts on state, ZIP, street address or units are flagged.</div>
+      <div className="dim" style={{ fontSize: 11.5, marginTop: 6 }}>Select or drag in as many PDFs as you like; they're read {ISP_CONCURRENCY} at a time, and files already in the repository are skipped. To keep reads small, pages with a text layer go as text, scanned pages as reduced images, and consulting agreements send only their first 3 and last 2 pages. ISP agreements get the full due diligence read; consulting agreements get a light read (consultant, owner, dates, term, scope) to pair and flag them. Each PDF is read by Claude, then paired to its tracker property using the name, street address, city, state, ZIP, units and owner entity in the contract. A clear match pairs automatically; otherwise you confirm the recommended property or pick the right one. Conflicts on state, ZIP, street address or units are flagged.</div>
       {items.length > 0 && (
         <div style={{ marginTop: 10, fontSize: 13 }}>
           {items.map((x, i) => (
@@ -9395,7 +9396,7 @@ function RfpDocuments({ property, docs, supabaseClient, userEmail, onChanged }) 
   };
   return (
     <div>
-      <input ref={placeRef} type="file" style={{ display: "none" }} onChange={attachPlaceholder} />
+      <input ref={placeRef} type="file" data-nodrop style={{ display: "none" }} onChange={attachPlaceholder} />
       {docs.length === 0 ? <div className="dim" style={{ fontSize: 13, marginBottom: 8 }}>No RFP on file yet.</div> : (
         <div className="contract-dates-list" style={{ marginBottom: 10 }}>
           {docs.map((d) => (
@@ -9570,7 +9571,7 @@ function SitePlansModal({ property, supabaseClient, userEmail, onClose, onChange
         <input ref={ref} type="file" multiple accept={SITE_PLAN_ACCEPT} style={{ display: "none" }} onChange={onFiles} />
         <div style={{ display: "flex", gap: 10, alignItems: "center", margin: "4px 0 12px" }}>
           <button className="btn-primary" disabled={busy} onClick={() => ref.current && ref.current.click()}>+ Add site plans</button>
-          <span style={{ fontSize: 12.5, opacity: 0.75 }}>PDFs, usually; images and CAD files are kept too. Select several at once.</span>
+          <span style={{ fontSize: 12.5, opacity: 0.75 }}>PDFs, usually; images and CAD files are kept too. Select several at once, or drag them onto this popup.</span>
         </div>
         {msg && <div style={{ fontSize: 13, marginBottom: 10, color: /couldn|fail/i.test(msg) ? "#ff8f86" : undefined }}>{msg}</div>}
         {list == null ? <div className="dim" style={{ fontSize: 13 }}>Loading…</div> : list.length === 0 ? <div className="dim" style={{ fontSize: 13 }}>No site plans on file yet.</div> : (
@@ -11094,6 +11095,54 @@ function DocumentsModal({ onClose, supabaseClient }) {
 }
 
 
+
+// Drag and drop for every file upload: dropping files on a popup, card or panel feeds them to the
+// nearest file input inside it (an element marked data-dropzone wins), exactly as if they were
+// picked with its button. Inputs marked data-nodrop are skipped; a single-file input takes the first file.
+function fileDropTarget(el) {
+  const usable = (root) => [...root.querySelectorAll('input[type="file"]')].filter((i) => !i.disabled && !i.hasAttribute("data-nodrop"));
+  const zone = el && el.closest && el.closest("[data-dropzone]");
+  if (zone) { const ins = usable(zone); if (ins.length) return { zone, input: ins[0] }; }
+  for (let n = el; n && n !== document.body; n = n.parentElement) {
+    if (n.nodeType !== 1) continue;
+    const ins = usable(n);
+    if (ins.length) return { zone: n, input: ins[0] };
+  }
+  return null;
+}
+function fileMatchesAccept(file, accept) {
+  if (!accept) return true;
+  const name = file.name.toLowerCase(), type = (file.type || "").toLowerCase();
+  return accept.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).some((a) =>
+    a.startsWith(".") ? name.endsWith(a) : a.endsWith("/*") ? type.startsWith(a.slice(0, -1)) : type === a);
+}
+function installFileDrop() {
+  if (window.__fileDropInstalled) return; window.__fileDropInstalled = true;
+  let hover = null;
+  const setHover = (z) => { if (hover === z) return; if (hover) hover.classList.remove("drop-hover"); hover = z; if (z) z.classList.add("drop-hover"); };
+  const hasFiles = (e) => e.dataTransfer && [...(e.dataTransfer.types || [])].includes("Files");
+  document.addEventListener("dragover", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    const t = fileDropTarget(e.target);
+    e.dataTransfer.dropEffect = t ? "copy" : "none";
+    setHover(t ? t.zone : null);
+  });
+  document.addEventListener("dragleave", (e) => { if (!e.relatedTarget) setHover(null); });
+  document.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); setHover(null);
+    const t = fileDropTarget(e.target);
+    if (!t) return;
+    let files = [...e.dataTransfer.files].filter((f) => fileMatchesAccept(f, t.input.accept));
+    if (!files.length) { window.alert(`None of those files can go here${t.input.accept ? ` (accepts ${t.input.accept})` : ""}.`); return; }
+    if (!t.input.multiple) files = files.slice(0, 1);
+    const dt = new DataTransfer(); files.forEach((f) => dt.items.add(f));
+    t.input.files = dt.files;
+    t.input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
 function App() {
   // Deliberately starts empty, not seeded with PROPERTIES — the moment
   // real data lived in this initial state, it was visible in the shipped
@@ -11437,6 +11486,7 @@ function App() {
   const [search, setSearch] = useState("");
   const [showClosed, setShowClosed] = useState(false);
   const [showProspecting, setShowProspecting] = useState(true);
+  useEffect(() => { installFileDrop(); }, []);
   const [contractsMode, setContractsModeState] = useState(() => { try { return localStorage.getItem("contractsMode") === "isp" ? "isp" : "advisory"; } catch (e) { return "advisory"; } });
   const setContractsMode = (m) => { setContractsModeState(m); try { localStorage.setItem("contractsMode", m); } catch (e) {} };
   // Contracts page: switch between Advisory Service Contracts and ISP Contracts (like Client → Owner / Property).
