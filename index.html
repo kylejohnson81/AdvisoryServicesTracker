@@ -588,9 +588,9 @@
 .proto-dash button.kpi:hover{border-color:var(--line2)}
 .proto-dash .kpi.sel{outline:2px solid var(--blue)}
 .proto-dash .phase-strip{grid-template-columns:repeat(auto-fit,minmax(112px,1fr))}
-.proto-dash .phase-buckets{display:grid;grid-template-columns:minmax(120px,0.6fr) 3fr 5fr;gap:10px;align-items:stretch}
+.proto-dash .phase-buckets{display:grid;grid-template-columns:1fr 3fr 5fr;gap:10px;align-items:stretch}
 .proto-dash .phase-bucket{border:1px solid var(--line);border-radius:12px;padding:8px 10px 10px;background:rgba(255,255,255,0.02)}
-.proto-dash .phase-bucket-h{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:600;margin:0 2px 7px}
+.proto-dash .phase-bucket-h{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:600;margin:0 2px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:16px}
 .proto-dash .phase-bucket .kpis{grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px}
 .proto-dash .phase-bucket .kpi.zero .v{opacity:.35}
 .proto-dash .bar-bucket{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);font-weight:600;margin:10px 0 3px}
@@ -4247,7 +4247,10 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
         <p className="sub">{properties.length} properties. Click any phase, status, or card to filter everything on this page.</p>
 
         <div className="phase-buckets">
-          <div className="kpi"><div className="v">{properties.length}</div><div className="k">Properties shown</div></div>
+          <div className="phase-bucket">
+            <div className="phase-bucket-h">Portfolio</div>
+            <div className="kpis"><div className="kpi"><div className="v">{properties.length}</div><div className="k">Properties shown</div></div></div>
+          </div>
           {PHASE_BUCKETS.map((b) => (
             <div className="phase-bucket" key={b.key}>
               <div className="phase-bucket-h">{b.label} · {phaseCounts.filter((ph) => ph.bucket === b.label).reduce((s, ph) => s + ph.count, 0)}</div>
