@@ -4336,11 +4336,12 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
 
         <div className="sec">Billing{importBilling && <span style={{ fontWeight: 400 }}> · from {importBilling.source}{importBilling.importedAt ? `, imported ${fmtDate(importBilling.importedAt.slice(0, 10))}` : ""}</span>}</div>
         {(() => {
-          // Four parts that never overlap and add up to everything contracted.
+          // Four parts that never overlap and add up to everything contracted,
+          // oldest money to newest: paid, overdue, invoiced not yet due, not yet invoiced.
           const parts = [
             { key: "paid", label: "Paid", value: billingSummary.paid || 0, color: "var(--green)", note: "Collected" },
-            { key: "current", label: "Invoiced, not yet due", value: billingSummary.invoiced || 0, color: "var(--blue)", note: `Within ${NET_TERMS_DAYS} days of invoice` },
             { key: "overdue", label: "Overdue", value: billingSummary.overdue || 0, color: "var(--red)", note: `Over ${NET_TERMS_DAYS} days since invoice` },
+            { key: "current", label: "Invoiced, not yet due", value: billingSummary.invoiced || 0, color: "var(--blue)", note: `Within ${NET_TERMS_DAYS} days of invoice` },
             { key: "pending", label: "Not yet invoiced", value: billingSummary.pending || 0, color: "#6b7a99", note: "Contracted, not billed yet" },
           ];
           const total = parts.reduce((s, x) => s + x.value, 0);
@@ -4354,10 +4355,10 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
                 </button>
                 <div className="bill-subs">
                   <button onClick={() => onOpenBilling && onOpenBilling("invoiced")} title="Open Billing: everything with an invoice date">
-                    <span className="sw" style={{ background: "linear-gradient(90deg,var(--green),var(--blue),var(--red))" }} />Invoiced <b>{money(invoicedTotal)}</b><span style={{ color: "var(--dim)" }}> = paid + not yet due + overdue</span>
+                    <span className="sw" style={{ background: "linear-gradient(90deg,var(--green),var(--red),var(--blue))" }} />Invoiced <b>{money(invoicedTotal)}</b><span style={{ color: "var(--dim)" }}> = paid + overdue + not yet due</span>
                   </button>
                   <button onClick={() => onOpenBilling && onOpenBilling("due")} title="Open Billing: everything not yet paid">
-                    <span className="sw" style={{ background: "linear-gradient(90deg,var(--blue),var(--red),#6b7a99)" }} />Still to collect <b className="c-a">{money(unpaidTotal)}</b><span style={{ color: "var(--dim)" }}> = not yet due + overdue + not yet invoiced · {billingSummary.unpaidProperties || 0} {billingSummary.unpaidProperties === 1 ? "property" : "properties"}</span>
+                    <span className="sw" style={{ background: "linear-gradient(90deg,var(--red),var(--blue),#6b7a99)" }} />Still to collect <b className="c-a">{money(unpaidTotal)}</b><span style={{ color: "var(--dim)" }}> = overdue + not yet due + not yet invoiced · {billingSummary.unpaidProperties || 0} {billingSummary.unpaidProperties === 1 ? "property" : "properties"}</span>
                   </button>
                 </div>
               </div>
