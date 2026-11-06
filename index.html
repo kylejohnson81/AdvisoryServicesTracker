@@ -10335,6 +10335,94 @@ function RfpBulkUpload({ properties, supabaseClient, userEmail }) {
 }
 
 
+// Change Log: the master-data records behind an entry (the tracker's Yardi
+// code, any candidate or wrong codes the entry names, and anything else
+// master has at the same street address), next to the tracker's own values.
+function MasterDataPopup({ row, property, supabaseClient, onClose }) {
+  const [recs, setRecs] = useState(null);
+  const [err, setErr] = useState(null);
+  const a = (property && property.program && property.program.attributes) || {};
+  useEffect(() => {
+    if (!supabaseClient) return;
+    const d = row.details || {};
+    const looksYardi = (v) => typeof v === "string" && /^[a-z0-9]{4,12}$/i.test(v.trim()) && !/^P-?\d+$/i.test(v.trim());
+    const codes = new Set([a["Yardi Code"], ...(Array.isArray(d.candidates) ? d.candidates : []), d.wrong_yardi, row.field === "Yardi Code" || row.field === "Location" ? row.old_value : null, row.field === "Yardi Code" || row.field === "Location" ? row.new_value : null]
+      .flatMap((v) => String(v || "").split(/[,\s]+/)).filter(looksYardi).map((v) => v.trim().toLowerCase()));
+    const cols = "yardi_code,name,address,city,state,zip,units,client,is_active,master_status";
+    const qs = [];
+    if (codes.size) qs.push(supabaseClient.from("master_properties").select(cols).in("yardi_code", [...codes]));
+    const num = String(a.Address || "").trim().match(/^(\d+[a-z]?)\s+(\S+)/i);
+    if (num && a.State) qs.push(supabaseClient.from("master_properties").select(cols).eq("state", String(a.State).trim().toUpperCase()).ilike("address", `${num[1]} ${num[2]}%`).limit(10));
+    if (!qs.length) { setRecs([]); return; }
+    Promise.all(qs).then((res) => {
+      const bad = res.find((r) => r.error);
+      if (bad) { setErr(bad.error.message); setRecs([]); return; }
+      const m = new Map();
+      res.forEach((r) => (r.data || []).forEach((x) => m.set(x.yardi_code.toLowerCase(), x)));
+      const mine = String(a["Yardi Code"] || "").toLowerCase();
+      setRecs([...m.values()].sort((x, y) => (y.yardi_code.toLowerCase() === mine) - (x.yardi_code.toLowerCase() === mine) || (y.is_active - x.is_active) || x.name.localeCompare(y.name)));
+    });
+  }, [row.id]); // eslint-disable-line
+  const addr = (x) => [x.address, x.city, [x.state, x.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  const mine = String(a["Yardi Code"] || "").toLowerCase();
+  const d = row.details || {};
+  const tag = (x) => {
+    const yc = x.yardi_code.toLowerCase();
+    if (yc === mine) return "Tracker's Yardi code";
+    if (Array.isArray(d.candidates) && d.candidates.some((c) => String(c).toLowerCase() === yc)) return "Candidate in this entry";
+    if (String(d.wrong_yardi || "").toLowerCase() === yc) return "Code flagged as wrong";
+    return "Same street address";
+  };
+  const Field = ({ k, v }) => <div style={{ display: "contents" }}><span style={{ color: "var(--mut)" }}>{k}</span><span>{v || "—"}</span></div>;
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 820, width: "94vw", maxHeight: "88vh", overflowY: "auto" }}>
+        <div className="modal-head">
+          <div>
+            <div className="field-label" style={{ margin: 0 }}>Master data</div>
+            <h2 style={{ margin: "2px 0" }}><span className="mono" style={{ opacity: 0.7 }}>{row.property_code}</span> {property ? property.name : row.property_name}</h2>
+          </div>
+          <button className="icon-btn" onClick={onClose}><X size={18} /></button>
+        </div>
+        {property && (
+          <div className="card" style={{ padding: "10px 12px", marginBottom: 12 }}>
+            <div className="field-label" style={{ margin: "0 0 6px" }}>In the tracker</div>
+            <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", gap: "4px 12px", fontSize: 13 }}>
+              <Field k="Property" v={property.name} />
+              <Field k="Address" v={[a.Address, a.City, [a.State, a.Zip].filter(Boolean).join(" ")].filter(Boolean).join(", ")} />
+              <Field k="Yardi code" v={a["Yardi Code"]} />
+              <Field k="Client" v={a.Client} />
+              <Field k="JV partner" v={a["JV Partner"]} />
+              <Field k="Units" v={a.Units} />
+            </div>
+          </div>
+        )}
+        <div className="field-label" style={{ margin: "0 0 6px" }}>In master data</div>
+        {err && <div style={{ color: "#ffc7c1", fontSize: 13 }}>Couldn't load master data: {err}</div>}
+        {recs == null ? <div style={{ color: "var(--mut)", fontSize: 13 }}>Loading…</div> : recs.length === 0 ? (
+          <div style={{ color: "var(--mut)", fontSize: 13 }}>No master record for this property's Yardi code or street address{property && !a["Yardi Code"] ? " (the tracker has no Yardi code)" : ""}.</div>
+        ) : recs.map((x) => (
+          <div key={x.yardi_code} className="card" style={{ padding: "10px 12px", marginBottom: 8, opacity: x.is_active ? 1 : 0.75 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
+              <span className="t-chip t-src">{tag(x)}</span>
+              {!x.is_active && <span className="t-chip" title="Not in the latest master import">Retired{x.master_status ? ` · ${x.master_status}` : ""}</span>}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", gap: "4px 12px", fontSize: 13 }}>
+              <Field k="Property" v={x.name} />
+              <Field k="Address" v={addr(x)} />
+              <Field k="Yardi code" v={<span className="mono">{x.yardi_code}</span>} />
+              <Field k="Client" v={x.client} />
+              <Field k="JV partner" v={<span style={{ color: "var(--mut)" }}>Not in master data{a["JV Partner"] && x.yardi_code.toLowerCase() === mine ? ` (tracker: ${a["JV Partner"]})` : ""}</span>} />
+              <Field k="Units" v={x.units != null ? String(x.units) : ""} />
+            </div>
+          </div>
+        ))}
+        <div style={{ fontSize: 12, color: "var(--dim)", marginTop: 8 }}>Master data's client is the owner of record; it can differ from the client the team works with. Master data has no JV partner field, so JV partner comes from the tracker.</div>
+      </div>
+    </div>
+  );
+}
+
 function ChangeLogView({ rows, loading, error, onRefresh, properties, setProperties, supabaseClient, userEmail, onOpenProperty, toggleTodoFor, setRows }) {
   const [filter, setFilter] = useState("decisions");
   const [showReviewed, setShowReviewed] = useState(false);
@@ -10342,6 +10430,7 @@ function ChangeLogView({ rows, loading, error, onRefresh, properties, setPropert
   const [busyId, setBusyId] = useState(null);
   const [msg, setMsg] = useState(null);
   const [masterCache, setMasterCache] = useState({});
+  const [masterFor, setMasterFor] = useState(null);
 
   const byCode = useMemo(() => {
     const m = {};
@@ -10863,7 +10952,10 @@ function ChangeLogView({ rows, loading, error, onRefresh, properties, setPropert
                     </div>
                   )}
                   {!r.reviewed && r.apply_result === "undone" && <div style={{ marginTop: 4, fontSize: 12, color: "var(--dim)" }}>Previously applied, then undone.</div>}
-                  <div style={{ marginTop: 7, display: "flex", gap: 8, flexWrap: "wrap" }}>{actionsFor(r)}</div>
+                  <div style={{ marginTop: 7, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                    {actionsFor(r)}
+                    {r.property_code && r.property_code !== "MASTER" && <button className="link" style={{ fontSize: 12.5, marginLeft: 4 }} onClick={() => setMasterFor(r)} title="Property name, address, Yardi code and client from master data">View master data</button>}
+                  </div>
                   {msg && msg.id === r.id && <div style={{ marginTop: 5, fontSize: 12.5, color: "#ffc7c1" }}>{msg.text}</div>}
                 </div>
               );
@@ -10871,6 +10963,7 @@ function ChangeLogView({ rows, loading, error, onRefresh, properties, setPropert
           </div>
         ))}
       </div>
+      {masterFor && <MasterDataPopup row={masterFor} property={byCode[masterFor.property_code]} supabaseClient={supabaseClient} onClose={() => setMasterFor(null)} />}
     </div>
   );
 }
