@@ -5294,7 +5294,7 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
             return (
               <>
                 {multi && !t.chosen && <div style={{ fontSize: 12, color: "#ffd98a", margin: "4px 2px 2px" }}>⚑ More than one provider on file: mark the one to track for contract expirations (until then, Alerts watch all of them).</div>}
-                {t.brandsOnFile.map((b) => {
+                {t.brandsOnFile.slice().sort((p, q) => ((termFor(p) || {}).term || { date: "9999" }).date.localeCompare(((termFor(q) || {}).term || { date: "9999" }).date)).map((b) => {
                   const x = termFor(b);
                   const tracked = t.chosen ? t.chosen === b : !multi;
                   return (
