@@ -593,9 +593,10 @@
 .proto-dash .phase-bucket-h{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:600;margin:0 2px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:16px}
 .proto-dash .phase-bucket .kpis{grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px}
 .proto-dash .phase-bucket .kpi.zero .v{opacity:.35}
-.proto-dash .phase-filter{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap;margin:12px 0 10px}
-.proto-dash .pf-bucket{border:1px solid var(--line);border-radius:10px;padding:6px 8px 8px;background:rgba(255,255,255,0.02)}
-.proto-dash .pf-bucket-h{display:block;font-family:inherit;background:none;border:0;padding:0 2px 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:600;cursor:pointer;text-align:left}
+.proto-dash .phase-filter{display:grid;gap:8px;margin:12px 0 10px}
+.proto-dash .pf-bucket{display:grid;grid-template-columns:270px 1fr;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;padding:7px 10px;background:rgba(255,255,255,0.02)}
+@media (max-width:760px){.proto-dash .pf-bucket{grid-template-columns:1fr}}
+.proto-dash .pf-bucket-h{display:block;font-family:inherit;background:none;border:0;padding:0 2px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:600;cursor:pointer;text-align:left}
 .proto-dash .pf-bucket-h:hover,.proto-dash .pf-bucket-h.on{color:var(--txt,#fff)}
 .proto-dash .pf-bucket-h.on{text-decoration:underline;text-underline-offset:3px}
 .proto-dash .pf-row{display:flex;gap:6px;flex-wrap:wrap}
@@ -604,7 +605,6 @@
 .proto-dash .pf-chip.on{border-color:var(--blue);color:var(--txt,#fff);box-shadow:0 0 0 1px var(--blue) inset}
 .proto-dash .pf-chip.zero{opacity:.5}
 .proto-dash .pf-chip b,.proto-dash .pf-bucket-h b{font-family:var(--mono);font-weight:600;margin-left:2px}
-.proto-dash .phase-filter>.pf-chip{align-self:flex-end;margin-bottom:8px}
 .proto-dash .pf-note{font-size:13px;color:var(--mut);margin:0 0 8px}
 .proto-dash .bar-bucket{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);font-weight:600;margin:10px 0 3px}
 .proto-dash .bar-bucket:first-of-type{margin-top:2px}
@@ -3923,6 +3923,7 @@ function PropertiesView({ properties: allRows, onOpenProperty, callNotes, search
             <button className={mode === "owner" ? "on" : ""} onClick={() => setMode("owner")} role="tab" aria-selected={mode === "owner"}>Owner</button>
             <button className={mode === "property" ? "on" : ""} onClick={() => setMode("property")} role="tab" aria-selected={mode === "property"}>Property</button>
           </div>
+          <button className={`pf-chip${!phaseFilter ? " on" : ""}`} onClick={() => setPhaseFilter && setPhaseFilter(null)} title="Clear the phase filter">All phases <b>{allRows.length}</b></button>
           <input type="text" placeholder={mode === "owner" ? "Search owners or properties" : "Search properties"} value={search} onChange={(e) => setSearch(e.target.value)} style={{ minWidth: 260 }} aria-label="Search" />
           {mode === "owner" && shownGroups.length > 0 && (
             <button className="link" onClick={() => setExpanded(allOpen ? new Set() : new Set(shownGroups.map((g) => g.key)))}>{allOpen ? "Collapse all" : "Expand all"}</button>
@@ -3934,7 +3935,6 @@ function PropertiesView({ properties: allRows, onOpenProperty, callNotes, search
           )}
         </div>
         <div className="phase-filter" role="group" aria-label="Filter by phase">
-          <button className={`pf-chip${!phaseFilter ? " on" : ""}`} onClick={() => setPhaseFilter && setPhaseFilter(null)}>All phases <b>{allRows.length}</b></button>
           {PHASE_BUCKETS.map((bk) => (
             <div className="pf-bucket" key={bk.key}>
               <button className={`pf-bucket-h${phaseFilter === bk.key ? " on" : ""}`} onClick={() => setPhaseFilter && setPhaseFilter(phaseFilter === bk.key ? null : bk.key)} title={`Show every property in ${bk.label}`}>
