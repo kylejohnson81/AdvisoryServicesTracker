@@ -7306,8 +7306,10 @@ const IE_MD_COLUMNS = [
   ["address", "Address"], ["city", "City"], ["state", "State"], ["zip", "Zip"],
   ["rpm", "RPM"], ["rpm_email", "RPM Email Address"], ["cm", "Property Manager"], ["cm_email", "Manager Email"],
 ];
-const IE_MD_COMPARE = ["master_id", "name", "master_status", "client", "region", "office", "units", "address", "city", "state", "zip", "rpm", "rpm_email", "cm", "cm_email"];
-const IE_MD_LABEL = { master_id: "Master ID", name: "Name", master_status: "Master Status", client: "Client", region: "Region", office: "Office", units: "Units", address: "Address", city: "City", state: "State", zip: "Zip", rpm: "RPM", rpm_email: "RPM Email", cm: "CM", cm_email: "CM Email" };
+// Optional columns: read when the export has them (matched by header text).
+const IE_MD_OPTIONAL = [["equity_partner", (hdr) => /equity/i.test(hdr)]];
+const IE_MD_COMPARE = ["master_id", "name", "master_status", "client", "equity_partner", "region", "office", "units", "address", "city", "state", "zip", "rpm", "rpm_email", "cm", "cm_email"];
+const IE_MD_LABEL = { master_id: "Master ID", name: "Name", master_status: "Master Status", client: "Client", equity_partner: "Equity Partner", region: "Region", office: "Office", units: "Units", address: "Address", city: "City", state: "State", zip: "Zip", rpm: "RPM", rpm_email: "RPM Email", cm: "CM", cm_email: "CM Email" };
 
 function ieParseMasterDataWorkbook(wb) {
   // Find the tab by its headers, not its name (Excel truncates tab names to 31 characters).
@@ -7334,6 +7336,12 @@ function ieParseMasterDataWorkbook(wb) {
           else if (f === "zip") rec[f] = ieZip(v) || null;
           else { const s = ieStr(v); rec[f] = s && s !== "N/A" ? s : null; }
         });
+        IE_MD_OPTIONAL.forEach(([f, test]) => {
+          const col = hdr.find((x) => x && test(x));
+          if (!col) return;
+          const s = ieStr(row[ix[col]]);
+          rec[f] = s && s !== "N/A" ? s : null;
+        });
         if (!rec.master_status) rec.master_status = "Active";
         seen[k] = rec.name || code;
         records.push(rec);
@@ -7348,7 +7356,7 @@ async function ieFetchAllMaster(supabaseClient) {
   const all = [];
   for (let from = 0; from < 50000; from += 1000) {
     const { data, error } = await supabaseClient.from("master_properties")
-      .select("yardi_code,master_id,name,client,region,office,units,address,city,state,zip,rpm,rpm_email,cm,cm_email,master_status,is_active")
+      .select("yardi_code,master_id,name,client,equity_partner,region,office,units,address,city,state,zip,rpm,rpm_email,cm,cm_email,master_status,is_active")
       .order("yardi_code").range(from, from + 999);
     if (error) throw new Error(`Couldn't read master data: ${error.message}`);
     all.push(...(data || []));
@@ -10348,7 +10356,7 @@ function MasterDataPopup({ row, property, supabaseClient, onClose }) {
     const looksYardi = (v) => typeof v === "string" && /^[a-z0-9]{4,12}$/i.test(v.trim()) && !/^P-?\d+$/i.test(v.trim());
     const codes = new Set([a["Yardi Code"], ...(Array.isArray(d.candidates) ? d.candidates : []), d.wrong_yardi, row.field === "Yardi Code" || row.field === "Location" ? row.old_value : null, row.field === "Yardi Code" || row.field === "Location" ? row.new_value : null]
       .flatMap((v) => String(v || "").split(/[,\s]+/)).filter(looksYardi).map((v) => v.trim().toLowerCase()));
-    const cols = "yardi_code,name,address,city,state,zip,units,client,is_active,master_status";
+    const cols = "yardi_code,name,address,city,state,zip,units,client,equity_partner,is_active,master_status";
     const qs = [];
     if (codes.size) qs.push(supabaseClient.from("master_properties").select(cols).in("yardi_code", [...codes]));
     const num = String(a.Address || "").trim().match(/^(\d+[a-z]?)\s+(\S+)/i);
@@ -10392,7 +10400,7 @@ function MasterDataPopup({ row, property, supabaseClient, onClose }) {
               <Field k="Address" v={[a.Address, a.City, [a.State, a.Zip].filter(Boolean).join(" ")].filter(Boolean).join(", ")} />
               <Field k="Yardi code" v={a["Yardi Code"]} />
               <Field k="Client" v={a.Client} />
-              <Field k="JV partner" v={a["JV Partner"]} />
+              <Field k="Equity partner" v={a["Equity Partner"] || a["JV Partner"]} />
               <Field k="Units" v={a.Units} />
             </div>
           </div>
@@ -10412,12 +10420,12 @@ function MasterDataPopup({ row, property, supabaseClient, onClose }) {
               <Field k="Address" v={addr(x)} />
               <Field k="Yardi code" v={<span className="mono">{x.yardi_code}</span>} />
               <Field k="Client" v={x.client} />
-              <Field k="JV partner" v={<span style={{ color: "var(--mut)" }}>Not in master data{a["JV Partner"] && x.yardi_code.toLowerCase() === mine ? ` (tracker: ${a["JV Partner"]})` : ""}</span>} />
+              <Field k="Equity partner" v={x.equity_partner || <span style={{ color: "var(--mut)" }}>Not on file (comes in with the next Refresh Master Data import)</span>} />
               <Field k="Units" v={x.units != null ? String(x.units) : ""} />
             </div>
           </div>
         ))}
-        <div style={{ fontSize: 12, color: "var(--dim)", marginTop: 8 }}>Master data's client is the owner of record; it can differ from the client the team works with. Master data has no JV partner field, so JV partner comes from the tracker.</div>
+        <div style={{ fontSize: 12, color: "var(--dim)", marginTop: 8 }}>Master data's client is the owner of record; it can differ from the client the team works with. Equity partner is read from the master export's Equity Partner column at each Refresh Master Data import.</div>
       </div>
     </div>
   );
