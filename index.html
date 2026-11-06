@@ -5309,12 +5309,12 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
             };
             return (
               <>
-                {multi && !t.chosen && <div style={{ fontSize: 12, color: "#ffd98a", margin: "4px 2px 2px" }}>⚑ More than one provider on file: mark the one to track for contract expirations (until then, Alerts watch all of them).</div>}
+                {multi && !t.chosen && <div style={{ fontSize: 12, color: "#ffd98a", margin: "4px 2px 2px" }}>☆ More than one provider on file: star the controlling provider. Until one is starred, this property raises no expiration alerts.</div>}
                 {t.brandsOnFile.slice().sort((p, q) => ((termFor(p) || {}).term || { date: "9999" }).date.localeCompare(((termFor(q) || {}).term || { date: "9999" }).date)).map((b) => {
                   const x = termFor(b);
-                  const tracked = t.chosen ? t.chosen === b : !multi;
+                  const tracked = t.chosen === b;
                   return (
-                    <div className="contract-date-row" key={b} style={x && x.alert && (tracked || !t.chosen) ? { borderColor: x.term.expired || x.days < 0 ? "#9E3B2E" : "#b08a2e" } : undefined}>
+                    <div className="contract-date-row" key={b} style={x && x.alert && tracked ? { borderColor: "#b08a2e" } : undefined}>
                       <span className="field-label" style={{ margin: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                         {multi ? (
                           <button className="link" style={{ fontSize: 15, color: t.chosen === b ? "#ffd98a" : "var(--ink-muted)", textDecoration: "none" }}
@@ -5328,7 +5328,7 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
                         </span>
                       </span>
                       <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        {x && (x.alert ? <IspExpiryPill term={x.term} /> : <span className="mono" style={{ fontSize: 12.5, opacity: 0.85 }}>Term ends {ispDate(x.term.date)}{x.term.rolled ? ` (${x.term.period})` : ""}</span>)}
+                        {x && (x.alert || x.term.expired ? <IspExpiryPill term={x.term} /> : <span className="mono" style={{ fontSize: 12.5, opacity: 0.85 }}>Term ends {ispDate(x.term.date)}{x.term.rolled ? ` (${x.term.period})` : ""}</span>)}
                       </span>
                     </div>
                   );
@@ -8359,18 +8359,28 @@ function ispProviderTerms(contracts) {
   const list = Object.values(by).map((x) => {
     const term = ispTermEnd(x.contract);
     const days = term ? ispDaysUntil(term.date) : null;
-    return { ...x, term, days, alert: !!term && (term.expired || days <= ISP_ALERT_DAYS) };
+    const y = { ...x, term, days };
+    return { ...y, alert: ispInAlertWindow(y) };
   }).sort((a, b) => (a.term ? a.term.date : "9999").localeCompare(b.term ? b.term.date : "9999"));
   return { list, brandsOnFile };
 }
-// The provider(s) whose expiration is tracked for a property: the one
-// flagged on the property record, else the only provider on file, else all
-// of them (with a prompt to choose).
+// Alert rule: a term end within the next 12 months (today included).
+const ispInAlertWindow = (x) => !!x.term && !x.term.expired && x.days >= 0 && x.days <= ISP_ALERT_DAYS;
+// The starred provider whose expiration is tracked for a property: the one
+// starred on the property record, or the only provider on file (starred
+// automatically). With more than one provider and none starred, nothing is
+// tracked and the property never raises an alert.
 function ispTrackedTerms(property, contracts) {
   const { list, brandsOnFile } = ispProviderTerms(contracts);
-  const chosen = property && property.program && property.program.trackedProvider;
-  if (chosen) return { terms: list.filter((x) => x.brand === chosen), chosen, needsChoice: false, brandsOnFile, all: list };
-  return { terms: list, chosen: null, needsChoice: brandsOnFile.length > 1, brandsOnFile, all: list };
+  const picked = property && property.program && property.program.trackedProvider;
+  const chosen = picked && brandsOnFile.includes(picked) ? picked : brandsOnFile.length === 1 ? brandsOnFile[0] : null;
+  return { terms: chosen ? list.filter((x) => x.brand === chosen) : [], chosen, starredByHand: !!picked && chosen === picked, needsChoice: !chosen && brandsOnFile.length > 1, brandsOnFile, all: list };
+}
+// Properties with more than one provider and nothing starred.
+function ispUnstarredProperties(properties, ispContracts) {
+  const byCode = {};
+  (ispContracts || []).forEach((c) => { if (c.property_code) (byCode[c.property_code] = byCode[c.property_code] || []).push(c); });
+  return (properties || []).filter((p) => computeStatus(p) !== "Closed" && byCode[p.code] && ispTrackedTerms(p, byCode[p.code]).needsChoice);
 }
 function ispExpirationAlerts(properties, ispContracts) {
   const byCode = {};
@@ -8399,6 +8409,7 @@ function AlertsView({ properties, ispContracts, onOpenProperty }) {
   const [mode, setModeState] = useState(() => { try { return localStorage.getItem("alertsMode") || "property"; } catch (e) { return "property"; } });
   const setMode = (m) => { setModeState(m); try { localStorage.setItem("alertsMode", m); } catch (e) {} };
   const alerts = useMemo(() => ispExpirationAlerts(properties, ispContracts), [properties, ispContracts]);
+  const unstarred = useMemo(() => ispUnstarredProperties(properties, ispContracts), [properties, ispContracts]);
   const clientOf = (p) => (p.program.attributes && p.program.attributes.Client) || "No client";
   const groups = useMemo(() => {
     const g = {};
@@ -8411,7 +8422,6 @@ function AlertsView({ properties, ispContracts, onOpenProperty }) {
       {!indent && <td>{i === 0 ? clientOf(a.property) : ""}</td>}
       <td>
         <b>{x.contract.provider || x.brand}</b>{!(x.contract.provider || "").toLowerCase().includes(x.brand.toLowerCase()) && <span style={{ color: "var(--mut)" }}> (now {x.brand})</span>}{a.chosen === x.brand && <span title="Tracked provider for this property" style={{ color: "#ffd98a", marginLeft: 6 }}>★ tracked</span>}
-        {i === 0 && a.needsChoice && <span className="t-chip" style={{ marginLeft: 8 }} title="This property has more than one provider: open it and mark the one to track">choose tracked provider</span>}
       </td>
       <td style={{ color: "var(--mut)" }}>{x.contract.agreement_type || "—"}</td>
       <td><IspExpiryPill term={x.term} compact /></td>
@@ -8422,7 +8432,7 @@ function AlertsView({ properties, ispContracts, onOpenProperty }) {
     <div className="proto-dash">
       <div className="wrap">
         <h1>Alerts</h1>
-        <p className="sub">Tracked provider contracts whose term ends within 12 months, soonest first. A contract past its stated expiration that auto-renews shows its current renewal term end. Open a property to set which provider to track when it has more than one.</p>
+        <p className="sub">Starred provider contracts whose term ends within the next 12 months, soonest first. A property's only provider is starred automatically; when there's more than one, star the controlling provider on the property record (ISP Contracts). A contract past its stated expiration that auto-renews shows its current renewal term end.</p>
         <div className="toolbar" style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <div className="nav" style={{ margin: 0 }} role="tablist" aria-label="View by">
             <button className={mode === "client" ? "on" : ""} onClick={() => setMode("client")} role="tab" aria-selected={mode === "client"}>Client</button>
@@ -8430,6 +8440,12 @@ function AlertsView({ properties, ispContracts, onOpenProperty }) {
           </div>
           <span style={{ color: "var(--mut)", fontSize: 13 }}>{alerts.length} {alerts.length === 1 ? "property" : "properties"}{mode === "client" ? ` · ${groups.length} ${groups.length === 1 ? "client" : "clients"}` : ""}</span>
         </div>
+        {unstarred.length > 0 && (
+          <div style={{ fontSize: 12.5, color: "#ffd98a", margin: "-4px 0 10px" }}>
+            ☆ {unstarred.length} {unstarred.length === 1 ? "property has" : "properties have"} more than one provider and nothing starred, so {unstarred.length === 1 ? "it" : "they"} can't raise alerts:{" "}
+            {unstarred.map((p, i) => <React.Fragment key={p.id}>{i > 0 && ", "}<button className="link" onClick={() => onOpenProperty(p)}>{p.code} {p.name}</button></React.Fragment>)}
+          </div>
+        )}
         <div className="tw">
           <table>
             <thead><tr><th>{mode === "client" ? "Client / property" : "Property"}</th>{mode === "property" && <th>Client</th>}<th>Provider</th><th>Agreement</th><th>Term ends</th><th>Renewal terms</th></tr></thead>
