@@ -593,6 +593,19 @@
 .proto-dash .phase-bucket-h{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:600;margin:0 2px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:16px}
 .proto-dash .phase-bucket .kpis{grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px}
 .proto-dash .phase-bucket .kpi.zero .v{opacity:.35}
+.proto-dash .phase-filter{display:flex;gap:10px;align-items:stretch;flex-wrap:wrap;margin:12px 0 10px}
+.proto-dash .pf-bucket{border:1px solid var(--line);border-radius:10px;padding:6px 8px 8px;background:rgba(255,255,255,0.02)}
+.proto-dash .pf-bucket-h{display:block;font-family:inherit;background:none;border:0;padding:0 2px 6px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:600;cursor:pointer;text-align:left}
+.proto-dash .pf-bucket-h:hover,.proto-dash .pf-bucket-h.on{color:var(--txt,#fff)}
+.proto-dash .pf-bucket-h.on{text-decoration:underline;text-underline-offset:3px}
+.proto-dash .pf-row{display:flex;gap:6px;flex-wrap:wrap}
+.proto-dash .pf-chip{font-family:inherit;display:inline-flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:5px 11px;font-size:12.5px;color:var(--mut);cursor:pointer;white-space:nowrap}
+.proto-dash .pf-chip:hover{border-color:var(--line2)}
+.proto-dash .pf-chip.on{border-color:var(--blue);color:var(--txt,#fff);box-shadow:0 0 0 1px var(--blue) inset}
+.proto-dash .pf-chip.zero{opacity:.5}
+.proto-dash .pf-chip b,.proto-dash .pf-bucket-h b{font-family:var(--mono);font-weight:600;margin-left:2px}
+.proto-dash .phase-filter>.pf-chip{align-self:flex-end;margin-bottom:8px}
+.proto-dash .pf-note{font-size:13px;color:var(--mut);margin:0 0 8px}
 .proto-dash .bar-bucket{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);font-weight:600;margin:10px 0 3px}
 .proto-dash .bar-bucket:first-of-type{margin-top:2px}
 @media (max-width:900px){.proto-dash .phase-buckets{grid-template-columns:1fr}}
@@ -3841,7 +3854,21 @@ function OwnerRecordModal({ ownerName, record, items, clientNotes, onSave, onClo
   );
 }
 
-function PropertiesView({ properties, onOpenProperty, callNotes, search, setSearch, portfolios, clientNotes, onSaveOwner, supabaseClient, showClosed, onToggleClosed, closedCount }) {
+// Does a property's current stage match the Client page phase filter
+// (a stage label or a bucket key)?
+function matchesPhaseFilter(stage, filter) {
+  if (!filter) return true;
+  const b = PHASE_BUCKETS.find((x) => x.key === filter);
+  return b ? b.stages.includes(stage) : stage === filter;
+}
+function phaseFilterLabel(filter) {
+  const b = PHASE_BUCKETS.find((x) => x.key === filter);
+  return b ? b.label : filter;
+}
+function PropertiesView({ properties: allRows, onOpenProperty, callNotes, search, setSearch, portfolios, clientNotes, onSaveOwner, supabaseClient, showClosed, onToggleClosed, closedCount, phaseFilter, setPhaseFilter }) {
+  const stageOf = useMemo(() => { const m = new Map(); allRows.forEach((p) => m.set(p.id, currentPhaseGroupLabel(p))); return m; }, [allRows]);
+  const stageCounts = useMemo(() => { const c = {}; stageOf.forEach((s) => { c[s] = (c[s] || 0) + 1; }); return c; }, [stageOf]);
+  const properties = useMemo(() => phaseFilter ? allRows.filter((p) => matchesPhaseFilter(stageOf.get(p.id), phaseFilter)) : allRows, [allRows, stageOf, phaseFilter]);
   const [mode, setModeState] = useState(() => { try { return localStorage.getItem("clientPageMode") || "owner"; } catch (e) { return "owner"; } });
   const setMode = (m) => { setModeState(m); try { localStorage.setItem("clientPageMode", m); } catch (e) {} };
   const [expanded, setExpanded] = useState(() => new Set());
@@ -3849,11 +3876,13 @@ function PropertiesView({ properties, onOpenProperty, callNotes, search, setSear
   const q = (search || "").toLowerCase();
 
   const rows = useMemo(() => properties.filter((p) => !q || `${p.code} ${p.name} ${p.program.attributes.Client || ""} ${p.program.attributes["JV Partner"] || ""}`.toLowerCase().includes(q)), [properties, q]);
-  const groups = useMemo(() => buildOwnerGroups(properties, portfolios), [properties, portfolios]);
+  const groups = useMemo(() => buildOwnerGroups(allRows, portfolios), [allRows, portfolios]);
   const shownGroups = useMemo(() => groups.filter((g) => !q || g.name.toLowerCase().includes(q) || g.items.some(({ p }) => `${p.code} ${p.name}`.toLowerCase().includes(q))), [groups, q]);
 
   const toggle = (key) => setExpanded((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const allOpen = shownGroups.length > 0 && shownGroups.every((g) => expanded.has(g.key));
+  // Owners and the properties under them, limited to the phase filter.
+  const filteredItems = (g) => phaseFilter ? g.items.filter(({ p }) => matchesPhaseFilter(stageOf.get(p.id), phaseFilter)) : g.items;
 
   const propCells = (p) => {
     const phaseLabel = currentPhaseGroupLabel(p);
@@ -3904,6 +3933,26 @@ function PropertiesView({ properties, onOpenProperty, callNotes, search, setSear
             </label>
           )}
         </div>
+        <div className="phase-filter" role="group" aria-label="Filter by phase">
+          <button className={`pf-chip${!phaseFilter ? " on" : ""}`} onClick={() => setPhaseFilter && setPhaseFilter(null)}>All phases <b>{allRows.length}</b></button>
+          {PHASE_BUCKETS.map((bk) => (
+            <div className="pf-bucket" key={bk.key}>
+              <button className={`pf-bucket-h${phaseFilter === bk.key ? " on" : ""}`} onClick={() => setPhaseFilter && setPhaseFilter(phaseFilter === bk.key ? null : bk.key)} title={`Show every property in ${bk.label}`}>
+                {bk.label} <b>{bk.stages.reduce((s, x) => s + (stageCounts[x] || 0), 0)}</b>
+              </button>
+              <div className="pf-row">
+                {bk.stages.map((s) => (
+                  <button key={s} className={`pf-chip${phaseFilter === s ? " on" : ""}${stageCounts[s] ? "" : " zero"}`} onClick={() => setPhaseFilter && setPhaseFilter(phaseFilter === s ? null : s)}>
+                    <span className="dot" style={{ background: STAGE_COLORS[s] }} />{s} <b>{stageCounts[s] || 0}</b>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        {phaseFilter && (
+          <div className="pf-note">Showing {properties.length} {properties.length === 1 ? "property" : "properties"} in <b>{phaseFilterLabel(phaseFilter)}</b>{mode === "owner" ? `, under ${shownGroups.filter((g) => filteredItems(g).length).length} owners` : ""}. <button className="link" onClick={() => setPhaseFilter(null)}>Clear filter</button></div>
+        )}
         <div className="tw">
           {mode === "property" ? (
             <table>
@@ -3929,10 +3978,11 @@ function PropertiesView({ properties, onOpenProperty, callNotes, search, setSear
               <tbody>
                 {shownGroups.length === 0 ? (
                   <tr><td colSpan={7} style={{ color: "var(--mut)" }}>No owners match.</td></tr>
-                ) : shownGroups.map((g) => {
+                ) : shownGroups.filter((g) => !phaseFilter || filteredItems(g).length).map((g) => {
                   const s = ownerSummary(g);
-                  const isOpen = expanded.has(g.key) || (q && !g.name.toLowerCase().includes(q));
-                  const items = q && !g.name.toLowerCase().includes(q) ? g.items.filter(({ p }) => `${p.code} ${p.name}`.toLowerCase().includes(q)) : g.items;
+                  const isOpen = expanded.has(g.key) || (q && !g.name.toLowerCase().includes(q)) || !!phaseFilter;
+                  const base = filteredItems(g);
+                  const items = q && !g.name.toLowerCase().includes(q) ? base.filter(({ p }) => `${p.code} ${p.name}`.toLowerCase().includes(q)) : base;
                   const clientN = g.items.filter((i) => i.role === "Client").length;
                   const jvN = g.items.length - clientN;
                   return (
@@ -4249,11 +4299,11 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
         <div className="phase-buckets">
           <div className="phase-bucket">
             <div className="phase-bucket-h">Portfolio</div>
-            <div className="kpis"><div className="kpi"><div className="v">{properties.length}</div><div className="k">Properties shown</div></div></div>
+            <div className="kpis"><button className="kpi" onClick={() => onNavigate("phase", null)} title="Open every property"><div className="v">{properties.length}</div><div className="k">Properties shown</div></button></div>
           </div>
           {PHASE_BUCKETS.map((b) => (
             <div className="phase-bucket" key={b.key}>
-              <div className="phase-bucket-h">{b.label} · {phaseCounts.filter((ph) => ph.bucket === b.label).reduce((s, ph) => s + ph.count, 0)}</div>
+              <button className="phase-bucket-h" style={{ background: "none", border: 0, padding: 0, cursor: "pointer", display: "block", textAlign: "left", font: "inherit", fontSize: 11.5, width: "100%" }} onClick={() => onNavigate("phase", b.key)} title={`Open every property in ${b.label}`}>{b.label} · {phaseCounts.filter((ph) => ph.bucket === b.label).reduce((s, ph) => s + ph.count, 0)}</button>
               <div className="kpis">
                 {phaseCounts.filter((ph) => ph.bucket === b.label).map((ph) => (
                   <button key={ph.label} className={`kpi${ph.count ? "" : " zero"}`} onClick={() => onNavigate("phase", ph.label)} title={`Open ${ph.label}`}>
@@ -11664,6 +11714,9 @@ function App() {
   };
   const [isolatedKey, setIsolatedKey] = useState(null);
   const [view, setView] = useState("home");
+  // Client page phase filter: null, a stage label, or a bucket key. Set from
+  // the Overview's phase tiles, which open the Client page already filtered.
+  const [clientPhaseFilter, setClientPhaseFilter] = useState(null);
   // Payment status filter on the Billing page; set by the overview billing tiles.
   const [billingStatus, setBillingStatus] = useState("all");
   const [search, setSearch] = useState("");
@@ -12314,7 +12367,12 @@ function App() {
           <DashboardView
             properties={visible}
             allProperties={properties}
-            onNavigate={(groupByKey, label) => setView("timeline")}
+            onNavigate={(groupByKey, label) => {
+              setClientPhaseFilter(label || null);
+              try { localStorage.setItem("clientPageMode", "property"); } catch (e) {}
+              setSearch("");
+              setView("properties");
+            }}
             onOpenProperty={(p) => openProgram(p)}
             onOpenExecutedContracts={() => { setBillingStatus("all"); setView("billing"); }}
             onOpenExecutedContractsForProperty={(p) => { setBillingStatus("all"); setView("billing"); openProgram(p); }}
@@ -12369,7 +12427,7 @@ function App() {
       )}
       {view === "properties" && (
         <PropertiesView properties={clientShowClosed ? properties.filter((p) => showProspecting || computeStatus(p) !== "Prospecting") : visible}
-          showClosed={clientShowClosed} onToggleClosed={setClientShowClosed} closedCount={properties.filter((p) => computeStatus(p) === "Closed").length} onOpenProperty={(p) => openProgram(p)} callNotes={callNotes} search={search} setSearch={setSearch} portfolios={portfolios} clientNotes={clientNotes} onSaveOwner={saveOwnerRecord} supabaseClient={supabaseClient} />
+          showClosed={clientShowClosed} onToggleClosed={setClientShowClosed} phaseFilter={clientPhaseFilter} setPhaseFilter={setClientPhaseFilter} closedCount={properties.filter((p) => computeStatus(p) === "Closed").length} onOpenProperty={(p) => openProgram(p)} callNotes={callNotes} search={search} setSearch={setSearch} portfolios={portfolios} clientNotes={clientNotes} onSaveOwner={saveOwnerRecord} supabaseClient={supabaseClient} />
       )}
 
 
