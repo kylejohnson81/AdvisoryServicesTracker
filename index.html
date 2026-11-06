@@ -593,6 +593,13 @@
 .proto-dash .phase-bucket-h{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:600;margin:0 2px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:16px}
 .proto-dash .phase-bucket .kpis{grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px}
 .proto-dash .phase-bucket .kpi.zero .v{opacity:.35}
+.proto-dash th.sort-th{cursor:pointer;user-select:none;white-space:nowrap}
+.proto-dash th.sort-th:hover{color:var(--txt)}
+.proto-dash .sort-ind{margin-left:5px;font-size:10px;opacity:.35}
+.proto-dash .sort-ind.on{opacity:1;color:var(--blue)}
+.proto-dash tr:has(+ tr.th-filters) th{border-bottom:0}
+.proto-dash .ac-table tr.th-filters th,.proto-dash tr.th-filters th{padding-top:0;padding-bottom:7px;font-weight:400}
+.proto-dash tr.th-filters input,.proto-dash tr.th-filters select{width:100%;min-width:56px;box-sizing:border-box;font:inherit;font-size:11.5px;padding:3px 6px;border-radius:6px;background:var(--inset);border:1px solid var(--line);color:var(--txt);text-transform:none;letter-spacing:0}
 .proto-dash .bill-flow{padding:14px 16px}
 .proto-dash .bill-flow-top{display:flex;gap:24px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px}
 .proto-dash .bill-total{display:flex;flex-direction:column;align-items:flex-start;background:none;border:0;padding:0;color:var(--txt);cursor:pointer;font-family:inherit;text-align:left}
@@ -8436,75 +8443,221 @@ function ispCurrentProgram(list) {
     .sort((a, b) => String(b.executed_date || b.effective_date || "").localeCompare(String(a.executed_date || a.effective_date || "")));
   return xs[0] || null;
 }
-function IspContractsTable({ rows, byCode, onOpen, showProperty, properties, supabaseClient, onChanged }) {
+// ---- Sortable, filterable columns (ISP contract tables) ----
+// Each column: { key, label, sort: (row) => string|number|null, text: (row) => string,
+// filter: "text" | "bool" | false }. Click a header to sort A→Z / oldest first,
+// again for Z→A / newest first, a third time to clear. Filters sit under the headers.
+function cmpSortVals(a, b) {
+  const na = a == null || a === "", nb = b == null || b === "";
+  if (na || nb) return na && nb ? 0 : na ? 1 : -1; // blanks always last
+  if (typeof a === "number" && typeof b === "number") return a - b;
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+}
+function useColumnSortFilter(rows, cols, storageKey) {
+  const [sort, setSortState] = useState(() => { try { return JSON.parse(localStorage.getItem(storageKey + ":sort") || "null"); } catch (e) { return null; } });
+  const setSort = (s) => { setSortState(s); try { localStorage.setItem(storageKey + ":sort", JSON.stringify(s)); } catch (e) {} };
+  const [filters, setFilters] = useState({});
+  const out = useMemo(() => {
+    let xs = rows.filter((r) => cols.every((c) => {
+      const f = filters[c.key];
+      if (!f) return true;
+      if (c.filter === "bool") { const v = c.boolOf(r); return f === "yes" ? v === true : f === "no" ? v === false : v == null; }
+      if (c.filter === "select") return (c.text(r) || "—") === f;
+      return String(c.text(r) || "").toLowerCase().includes(f.toLowerCase());
+    }));
+    const col = sort && cols.find((c) => c.key === sort.key);
+    if (col) {
+      xs = xs.map((r, i) => ({ r, i, v: col.sort(r) }))
+        .sort((x, y) => { const d = cmpSortVals(x.v, y.v); if (x.v == null || x.v === "" || y.v == null || y.v === "") return d || x.i - y.i; return (sort.dir === "desc" ? -d : d) || x.i - y.i; })
+        .map((x) => x.r);
+    }
+    return xs;
+  }, [rows, cols, filters, sort]);
+  const clickSort = (key) => {
+    if (!sort || sort.key !== key) setSort({ key, dir: "asc" });
+    else if (sort.dir === "asc") setSort({ key, dir: "desc" });
+    else setSort(null);
+  };
+  const activeFilters = Object.values(filters).filter(Boolean).length;
+  const head = (
+    <>
+      <tr>
+        {cols.map((c) => (
+          <th key={c.key} className="sort-th" onClick={() => clickSort(c.key)} title={`Sort by ${c.label}${c.chrono ? " (oldest first, then newest first)" : " (A→Z, then Z→A)"}`} aria-sort={sort && sort.key === c.key ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+            {c.label}<span className={`sort-ind${sort && sort.key === c.key ? " on" : ""}`}>{sort && sort.key === c.key ? (sort.dir === "asc" ? "▲" : "▼") : "↕"}</span>
+          </th>
+        ))}
+      </tr>
+      <tr className="th-filters">
+        {cols.map((c) => (
+          <th key={c.key}>
+            {c.filter === false ? null : c.filter === "bool" ? (
+              <select value={filters[c.key] || ""} onChange={(e) => setFilters((f) => ({ ...f, [c.key]: e.target.value }))} aria-label={`Filter ${c.label}`}>
+                <option value="">All</option><option value="yes">Yes</option><option value="no">No</option><option value="blank">Blank</option>
+              </select>
+            ) : c.filter === "select" ? (
+              <select value={filters[c.key] || ""} onChange={(e) => setFilters((f) => ({ ...f, [c.key]: e.target.value }))} aria-label={`Filter ${c.label}`}>
+                <option value="">All</option>
+                {[...new Set(rows.map((r) => c.text(r) || "—"))].sort(cmpSortVals).map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            ) : (
+              <input type="text" value={filters[c.key] || ""} placeholder="Filter" onChange={(e) => setFilters((f) => ({ ...f, [c.key]: e.target.value }))} aria-label={`Filter ${c.label}`} />
+            )}
+          </th>
+        ))}
+      </tr>
+    </>
+  );
+  return { rows: out, head, activeFilters, clearFilters: () => setFilters({}), sort };
+}
+const ispPropSortKey = (p) => (p ? `${p.code}` : null);
+const ispClientOf = (p) => (p && p.program && p.program.attributes && p.program.attributes.Client) || "";
+function ispContractCols({ byCode, properties, showProperty }) {
+  const P = (c) => byCode[c.property_code];
+  const cols = [];
+  if (showProperty) {
+    cols.push({ key: "property", label: "Property", sort: (c) => (P(c) ? P(c).name : c.property_name_in_contract ? `~ ${c.property_name_in_contract}` : null), text: (c) => (P(c) ? `${P(c).code} ${P(c).name}` : `Unpaired ${c.property_name_in_contract || ""}`) });
+    cols.push({ key: "client", label: "Client", sort: (c) => ispClientOf(P(c)) || null, text: (c) => ispClientOf(P(c)) });
+  }
+  cols.push(
+    { key: "provider", label: "Provider", sort: (c) => c.provider || null, text: (c) => c.provider || c.file_name || "" },
+    { key: "agreement", label: "Agreement", sort: (c) => c.agreement_type || c.agreement_title || null, text: (c) => c.agreement_type || c.agreement_title || "", filter: "select" },
+    { key: "program", label: "Program", sort: (c) => c.program_type || null, text: (c) => c.program_type || "", filter: "select" },
+    { key: "executed", label: "Executed", chrono: true, sort: (c) => c.executed_date || null, text: (c) => (c.executed_date ? `${c.executed_date} ${ispDate(c.executed_date)}` : "") },
+    { key: "term", label: "Term", sort: (c) => (c.term_months != null ? Number(c.term_months) : null), text: (c) => `${ispTerm(c)} ${c.term_text || ""}` },
+    { key: "expires", label: "Expires", chrono: true, sort: (c) => c.expiration_date || null, text: (c) => (c.expiration_date ? `${c.expiration_date} ${ispDate(c.expiration_date)}` : "") },
+    { key: "escalator", label: "Escalator", sort: (c) => (c.escalator_pct != null ? Number(c.escalator_pct) : c.escalator || null), text: (c) => `${c.escalator_pct != null ? c.escalator_pct + "%" : ""} ${c.escalator || ""}` },
+    { key: "revshare", label: "Rev share (retail)", sort: (c) => c.rev_share || null, text: (c) => c.rev_share || "" },
+    { key: "door", label: "Door fees", sort: (c) => (c.door_fee_amount != null ? Number(c.door_fee_amount) : c.door_fee || null), text: (c) => `${ispMoney(c.door_fee_amount) || ""} ${c.door_fee || ""}` },
+    { key: "paper", label: "Paper", sort: (c) => c.contract_paper || null, text: (c) => c.contract_paper || "", filter: "select" },
+    { key: "antibulk", label: "Anti-bulk", sort: (c) => (c.anti_bulk == null ? null : c.anti_bulk ? "Yes" : "No"), text: (c) => (c.anti_bulk == null ? "" : c.anti_bulk ? "Yes" : "No"), filter: "bool", boolOf: (c) => (c.anti_bulk == null ? null : !!c.anti_bulk) },
+    { key: "exclusive", label: "Exclusive", sort: (c) => (c.exclusive == null ? null : c.exclusive ? "Yes" : "No"), text: (c) => (c.exclusive == null ? "" : c.exclusive ? "Yes" : "No"), filter: "bool", boolOf: (c) => (c.exclusive == null ? null : !!c.exclusive) },
+    { key: "match", label: "Tracker match", sort: (c) => ispPairStatus(c, properties || []).label, text: (c) => ispPairStatus(c, properties || []).label, filter: "select" },
+    { key: "status", label: "Status", sort: (c) => (c.status === "done" ? (c.verified ? "Verified" : "Extracted") : c.status === "error" ? "Couldn't read" : "Reading"), text: (c) => (c.status === "done" ? (c.verified ? "Verified" : "Extracted") : c.status === "error" ? "Couldn't read" : "Reading"), filter: "select" },
+  );
+  return cols;
+}
+// Rows of one table body, optionally grouped under client headers.
+function groupRowsByClient(rows, clientOf) {
+  const g = new Map();
+  rows.forEach((r) => { const k = clientOf(r) || "No client"; if (!g.has(k)) g.set(k, []); g.get(k).push(r); });
+  return [...g.entries()].sort((a, b) => (a[0] === "No client") - (b[0] === "No client") || a[0].localeCompare(b[0], undefined, { sensitivity: "base" }));
+}
+
+function IspContractsTable({ rows, byCode, onOpen, showProperty, properties, supabaseClient, onChanged, groupByClient }) {
+  const cols = useMemo(() => ispContractCols({ byCode, properties, showProperty }), [byCode, properties, showProperty]);
+  const sf = useColumnSortFilter(rows, cols, showProperty ? "ispTable" : "ispTableProp");
+  const renderRow = (c, indent) => {
+    const p = byCode[c.property_code];
+    const mo = ispMonthsToExpiry(c);
+    return (
+      <tr key={c.id} className="click" onClick={() => onOpen(c)} style={{ cursor: "pointer", ...(indent ? { background: "var(--inset)" } : {}) }}>
+        {showProperty && <td title={p ? `${p.code} ${p.name}` : c.property_name_in_contract || ""} style={{ minWidth: 150, maxWidth: 260, ...(indent ? { paddingLeft: 26 } : {}) }}>
+          <div className="clamp2">{p ? <><span className="id">{p.code}</span> {p.name}</> : <span style={{ color: "#d3cdfa" }}>Unpaired{c.property_name_in_contract ? ` · ${c.property_name_in_contract}` : ""}</span>}</div></td>}
+        {showProperty && <td title={ispClientOf(p)} style={{ minWidth: 90, maxWidth: 170, color: "var(--mut)" }}><div className="clamp2">{ispClientOf(p) || "—"}</div></td>}
+        <td title={c.provider || ""} style={{ fontWeight: 600, minWidth: 110, maxWidth: 200 }}><div className="clamp2">{c.provider || (c.status === "done" ? "—" : c.file_name)}</div></td>
+        <td title={c.agreement_title || ""} style={{ minWidth: 100, maxWidth: 200}}><div className="clamp2">{c.agreement_type || c.agreement_title || "—"}</div></td>
+        <td style={{ whiteSpace: "nowrap" }}><IspProgramCell c={c} supabaseClient={supabaseClient} onChanged={onChanged} /></td>
+        <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.executed_date)}</td>
+        <td title={c.term_text || ""} style={{ minWidth: 70, maxWidth: 190 }}><div className="clamp2">{ispTerm(c)}</div></td>
+        <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.expiration_date)}{mo != null && mo >= 0 && mo <= 12 && <span className="t-chip t-old" style={{ marginLeft: 6 }}>{mo} mo</span>}{mo != null && mo < 0 && <span className="t-chip" style={{ marginLeft: 6 }}>Expired</span>}</td>
+        <td title={c.escalator || ""} style={{ minWidth: 90, maxWidth: 200}}><div className="clamp2">{c.escalator_pct != null ? `${c.escalator_pct}%` : (c.escalator || "—")}</div></td>
+        <td title={c.rev_share || ""} style={{ minWidth: 120, maxWidth: 260}}><div className="clamp2">{c.rev_share || "—"}</div></td>
+        <td title={c.door_fee || ""} style={{ minWidth: 100, maxWidth: 240}}><div className="clamp2">{ispMoney(c.door_fee_amount) || c.door_fee || "—"}</div></td>
+        <td>{c.contract_paper || "—"}</td>
+        <td><IspFlag v={c.anti_bulk} label={c.anti_bulk_detail || ""} /></td>
+        <td><IspFlag v={c.exclusive} label={c.exclusivity_detail || ""} /></td>
+        <td><IspPairPill c={c} properties={properties || []} /></td>
+        <td><IspStatusPill c={c} /></td>
+      </tr>
+    );
+  };
+  const n = cols.length;
   return (
-    <div className="tw ac-table ac-fit">
-      <table>
-        <thead><tr>
-          {showProperty && <th>Property</th>}<th>Provider</th><th>Agreement</th><th>Program</th><th>Executed</th><th>Term</th><th>Expires</th>
-          <th>Escalator</th><th>Rev share (retail)</th><th>Door fees</th><th>Paper</th><th>Anti-bulk</th><th>Exclusive</th><th>Tracker match</th><th>Status</th>
-        </tr></thead>
-        <tbody>
-          {rows.length === 0 ? (
-            <tr><td colSpan={showProperty ? 15 : 14} style={{ color: "var(--mut)" }}>No ISP contracts yet. Upload them from Import / Export → Import → ISP Contracts.</td></tr>
-          ) : rows.map((c) => {
-            const p = byCode[c.property_code];
-            const mo = ispMonthsToExpiry(c);
-            return (
-              <tr key={c.id} className="click" onClick={() => onOpen(c)} style={{ cursor: "pointer" }}>
-                {showProperty && <td title={p ? `${p.code} ${p.name}` : c.property_name_in_contract || ""} style={{ minWidth: 150, maxWidth: 260}}>
-                  <div className="clamp2">{p ? <><span className="id">{p.code}</span> {p.name}</> : <span style={{ color: "#d3cdfa" }}>Unpaired{c.property_name_in_contract ? ` · ${c.property_name_in_contract}` : ""}</span>}</div></td>}
-                <td title={c.provider || ""} style={{ fontWeight: 600, minWidth: 110, maxWidth: 200 }}><div className="clamp2">{c.provider || (c.status === "done" ? "—" : c.file_name)}</div></td>
-                <td title={c.agreement_title || ""} style={{ minWidth: 100, maxWidth: 200}}><div className="clamp2">{c.agreement_type || c.agreement_title || "—"}</div></td>
-                <td style={{ whiteSpace: "nowrap" }}><IspProgramCell c={c} supabaseClient={supabaseClient} onChanged={onChanged} /></td>
-                <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.executed_date)}</td>
-                <td title={c.term_text || ""} style={{ minWidth: 70, maxWidth: 190 }}><div className="clamp2">{ispTerm(c)}</div></td>
-                <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.expiration_date)}{mo != null && mo >= 0 && mo <= 12 && <span className="t-chip t-old" style={{ marginLeft: 6 }}>{mo} mo</span>}{mo != null && mo < 0 && <span className="t-chip" style={{ marginLeft: 6 }}>Expired</span>}</td>
-                <td title={c.escalator || ""} style={{ minWidth: 90, maxWidth: 200}}><div className="clamp2">{c.escalator_pct != null ? `${c.escalator_pct}%` : (c.escalator || "—")}</div></td>
-                <td title={c.rev_share || ""} style={{ minWidth: 120, maxWidth: 260}}><div className="clamp2">{c.rev_share || "—"}</div></td>
-                <td title={c.door_fee || ""} style={{ minWidth: 100, maxWidth: 240}}><div className="clamp2">{ispMoney(c.door_fee_amount) || c.door_fee || "—"}</div></td>
-                <td>{c.contract_paper || "—"}</td>
-                <td><IspFlag v={c.anti_bulk} label={c.anti_bulk_detail || ""} /></td>
-                <td><IspFlag v={c.exclusive} label={c.exclusivity_detail || ""} /></td>
-                <td><IspPairPill c={c} properties={properties || []} /></td>
-                <td><IspStatusPill c={c} /></td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <>
+      {sf.activeFilters > 0 && <div style={{ fontSize: 13, color: "var(--mut)", margin: "0 0 6px" }}>{sf.rows.length} of {rows.length} contracts match {sf.activeFilters} column filter{sf.activeFilters === 1 ? "" : "s"}. <button className="link" onClick={sf.clearFilters}>Clear filters</button></div>}
+      <div className="tw ac-table ac-fit">
+        <table>
+          <thead>{sf.head}</thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr><td colSpan={n} style={{ color: "var(--mut)" }}>No ISP contracts yet. Upload them from Import / Export → Import → ISP Contracts.</td></tr>
+            ) : sf.rows.length === 0 ? (
+              <tr><td colSpan={n} style={{ color: "var(--mut)" }}>No contracts match these filters.</td></tr>
+            ) : groupByClient ? groupRowsByClient(sf.rows, (c) => ispClientOf(byCode[c.property_code])).map(([client, items]) => (
+              <React.Fragment key={client}>
+                <tr className="owner-tr"><td colSpan={n} style={{ fontWeight: 600 }}>{client} <span style={{ color: "var(--mut)", fontWeight: 400 }}>· {items.length} contract{items.length === 1 ? "" : "s"} · {new Set(items.map((c) => c.property_code).filter(Boolean)).size} {new Set(items.map((c) => c.property_code).filter(Boolean)).size === 1 ? "property" : "properties"}</span></td></tr>
+                {items.map((c) => renderRow(c, true))}
+              </React.Fragment>
+            )) : sf.rows.map((c) => renderRow(c, false))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
-function IspConsultingTable({ rows, byCode, onOpen, showProperty, properties }) {
+function IspConsultingTable({ rows, byCode, onOpen, showProperty, properties, groupByClient }) {
+  const cols = useMemo(() => {
+    const P = (c) => byCode[c.property_code];
+    const cs = [];
+    if (showProperty) {
+      cs.push({ key: "property", label: "Property", sort: (c) => (P(c) ? P(c).name : null), text: (c) => (P(c) ? `${P(c).code} ${P(c).name}` : `Unpaired ${c.property_name_in_contract || ""}`) });
+      cs.push({ key: "client", label: "Client", sort: (c) => ispClientOf(P(c)) || null, text: (c) => ispClientOf(P(c)) });
+    }
+    cs.push(
+      { key: "consultant", label: "Consultant", sort: (c) => c.consultant || null, text: (c) => c.consultant || c.file_name || "" },
+      { key: "agreement", label: "Agreement", sort: (c) => c.agreement_title || null, text: (c) => c.agreement_title || "" },
+      { key: "scope", label: "Scope", sort: (c) => c.scope_summary || null, text: (c) => c.scope_summary || "" },
+      { key: "executed", label: "Executed", chrono: true, sort: (c) => c.executed_date || null, text: (c) => (c.executed_date ? `${c.executed_date} ${ispDate(c.executed_date)}` : "") },
+      { key: "term", label: "Term", sort: (c) => (c.term_months != null ? Number(c.term_months) : null), text: (c) => `${ispTerm(c)} ${c.term_text || ""}` },
+      { key: "expires", label: "Expires", chrono: true, sort: (c) => c.expiration_date || null, text: (c) => (c.expiration_date ? `${c.expiration_date} ${ispDate(c.expiration_date)}` : "") },
+      { key: "match", label: "Tracker match", sort: (c) => ispPairStatus(c, properties || []).label, text: (c) => ispPairStatus(c, properties || []).label, filter: "select" },
+      { key: "status", label: "Status", sort: (c) => (c.status === "done" ? (c.verified ? "Verified" : "Extracted") : c.status), text: (c) => (c.status === "done" ? (c.verified ? "Verified" : "Extracted") : c.status === "error" ? "Couldn't read" : "Reading"), filter: "select" },
+    );
+    return cs;
+  }, [byCode, properties, showProperty]);
+  const sf = useColumnSortFilter(rows, cols, showProperty ? "consultTable" : "consultTableProp");
+  const n = cols.length;
+  const renderRow = (c, indent) => {
+    const p = byCode[c.property_code];
+    const mo = ispMonthsToExpiry(c);
+    return (
+      <tr key={c.id} className="click" onClick={() => onOpen(c)} style={{ cursor: "pointer", ...(indent ? { background: "var(--inset)" } : {}) }}>
+        {showProperty && <td title={p ? `${p.code} ${p.name}` : ""} style={{ minWidth: 150, maxWidth: 260, ...(indent ? { paddingLeft: 26 } : {}) }}>{p ? <><span className="id">{p.code}</span> {p.name}</> : <span style={{ color: "#d3cdfa" }}>Unpaired{c.property_name_in_contract ? ` · ${c.property_name_in_contract}` : ""}</span>}</td>}
+        {showProperty && <td style={{ color: "var(--mut)", maxWidth: 170 }}>{ispClientOf(p) || "—"}</td>}
+        <td style={{ fontWeight: 600, minWidth: 110, maxWidth: 200 }}>{c.consultant || (c.status === "done" ? "—" : c.file_name)}</td>
+        <td title={c.agreement_title || ""} style={{ maxWidth: 200}}>{c.agreement_title || "—"}</td>
+        <td title={c.scope_summary || ""} style={{ maxWidth: 320}}><div className="clamp2">{c.scope_summary || "—"}</div></td>
+        <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.executed_date)}</td>
+        <td title={c.term_text || ""} style={{ minWidth: 70, maxWidth: 190 }}><div className="clamp2">{ispTerm(c)}</div></td>
+        <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.expiration_date)}{mo != null && mo < 0 && <span className="t-chip" style={{ marginLeft: 6 }}>Expired</span>}{mo != null && mo >= 0 && <span className="t-chip t-old" style={{ marginLeft: 6 }}>Active</span>}</td>
+        <td><IspPairPill c={c} properties={properties || []} /></td>
+        <td><IspStatusPill c={c} /></td>
+      </tr>
+    );
+  };
   return (
-    <div className="tw ac-table ac-fit">
-      <table>
-        <thead><tr>{showProperty && <th>Property</th>}<th>Consultant</th><th>Agreement</th><th>Scope</th><th>Executed</th><th>Term</th><th>Expires</th><th>Tracker match</th><th>Status</th></tr></thead>
-        <tbody>
-          {rows.length === 0 ? (
-            <tr><td colSpan={showProperty ? 9 : 8} style={{ color: "var(--mut)" }}>No consulting agreements on file.</td></tr>
-          ) : rows.map((c) => {
-            const p = byCode[c.property_code];
-            const mo = ispMonthsToExpiry(c);
-            return (
-              <tr key={c.id} className="click" onClick={() => onOpen(c)} style={{ cursor: "pointer" }}>
-                {showProperty && <td title={p ? `${p.code} ${p.name}` : ""} style={{ minWidth: 150, maxWidth: 260}}>{p ? <><span className="id">{p.code}</span> {p.name}</> : <span style={{ color: "#d3cdfa" }}>Unpaired{c.property_name_in_contract ? ` · ${c.property_name_in_contract}` : ""}</span>}</td>}
-                <td style={{ fontWeight: 600, minWidth: 110, maxWidth: 200 }}>{c.consultant || (c.status === "done" ? "—" : c.file_name)}</td>
-                <td title={c.agreement_title || ""} style={{ maxWidth: 200}}>{c.agreement_title || "—"}</td>
-                <td title={c.scope_summary || ""} style={{ maxWidth: 320}}><div className="clamp2">{c.scope_summary || "—"}</div></td>
-                <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.executed_date)}</td>
-                <td title={c.term_text || ""} style={{ minWidth: 70, maxWidth: 190 }}><div className="clamp2">{ispTerm(c)}</div></td>
-                <td style={{ whiteSpace: "nowrap" }}>{ispDate(c.expiration_date)}{mo != null && mo < 0 && <span className="t-chip" style={{ marginLeft: 6 }}>Expired</span>}{mo != null && mo >= 0 && <span className="t-chip t-old" style={{ marginLeft: 6 }}>Active</span>}</td>
-                <td><IspPairPill c={c} properties={properties || []} /></td>
-                <td><IspStatusPill c={c} /></td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <>
+      {sf.activeFilters > 0 && <div style={{ fontSize: 13, color: "var(--mut)", margin: "0 0 6px" }}>{sf.rows.length} of {rows.length} agreements match. <button className="link" onClick={sf.clearFilters}>Clear filters</button></div>}
+      <div className="tw ac-table ac-fit">
+        <table>
+          <thead>{sf.head}</thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr><td colSpan={n} style={{ color: "var(--mut)" }}>No consulting agreements on file.</td></tr>
+            ) : sf.rows.length === 0 ? (
+              <tr><td colSpan={n} style={{ color: "var(--mut)" }}>No agreements match these filters.</td></tr>
+            ) : groupByClient ? groupRowsByClient(sf.rows, (c) => ispClientOf(byCode[c.property_code])).map(([client, items]) => (
+              <React.Fragment key={client}>
+                <tr className="owner-tr"><td colSpan={n} style={{ fontWeight: 600 }}>{client} <span style={{ color: "var(--mut)", fontWeight: 400 }}>· {items.length} agreement{items.length === 1 ? "" : "s"}</span></td></tr>
+                {items.map((c) => renderRow(c, true))}
+              </React.Fragment>
+            )) : sf.rows.map((c) => renderRow(c, false))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -8962,6 +9115,8 @@ function IspContractsView({ contracts, properties, supabaseClient, onChanged, on
   const [open, setOpen] = useState(null);
   const byCode = useMemo(() => { const m = {}; properties.forEach((p) => { m[p.code] = p; }); return m; }, [properties]);
   const [kind, setKind] = useState("isp");
+  const [viewBy, setViewByState] = useState(() => { try { return localStorage.getItem("ispViewBy") || "property"; } catch (e) { return "property"; } });
+  const setViewBy = (m) => { setViewByState(m); try { localStorage.setItem("ispViewBy", m); } catch (e) {} };
   const all = contracts || [];
   const consultingList = all.filter((c) => c.doc_kind === "consulting");
   const list = all.filter((c) => c.doc_kind !== "consulting");
@@ -8997,12 +9152,17 @@ function IspContractsView({ contracts, properties, supabaseClient, onChanged, on
             <button key={k} className={tab === k ? "on" : ""} onClick={() => setTab(k)}>{l}</button>
           ))}
         </div>}
-        <div className="toolbar">
+        <div className="toolbar" style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div className="nav" style={{ margin: 0 }} role="tablist" aria-label="View by">
+            <button className={viewBy === "client" ? "on" : ""} onClick={() => setViewBy("client")} role="tab" aria-selected={viewBy === "client"}>Client</button>
+            <button className={viewBy === "property" ? "on" : ""} onClick={() => setViewBy("property")} role="tab" aria-selected={viewBy === "property"}>Property</button>
+          </div>
           <input type="text" placeholder={kind === "consulting" ? "Search by property, client or consultant" : "Search by property, client or provider"} value={search} onChange={(e) => setSearch(e.target.value)} style={{ minWidth: 280 }} aria-label="Search ISP contracts" />
+          <span style={{ fontSize: 12.5, color: "var(--mut)" }}>Click a column header to sort; type or pick under it to filter.</span>
         </div>
         {kind === "consulting"
-          ? <IspConsultingTable rows={consultShown} byCode={byCode} onOpen={setOpen} showProperty properties={properties} />
-          : <IspContractsTable rows={shown} byCode={byCode} onOpen={setOpen} showProperty properties={properties} supabaseClient={supabaseClient} onChanged={onChanged} />}
+          ? <IspConsultingTable rows={consultShown} byCode={byCode} onOpen={setOpen} showProperty properties={properties} groupByClient={viewBy === "client"} />
+          : <IspContractsTable rows={shown} byCode={byCode} onOpen={setOpen} showProperty properties={properties} supabaseClient={supabaseClient} onChanged={onChanged} groupByClient={viewBy === "client"} />}
         <p className="foot">Terms are read from each PDF by Claude; check them against the PDF and tick "Verified" in the drill-in. Tracker match compares the contract's name, street address, city, state, ZIP, units and owner entity with the paired property: Paired (identifiers agree), Check (minor differences), Mismatch (state, ZIP, street address or units disagree) or Unpaired.</p>
       </div>
       {openC && <IspContractDetail contract={openC} properties={properties} supabaseClient={supabaseClient} onClose={() => setOpen(null)} onChanged={onChanged} onOpenProperty={onOpenProperty} onOpenLegislation={(st) => { setOpen(null); onOpenLegislation(st); }} legisItems={legisItems} userEmail={userEmail} onApplyToTracker={onApplyToTracker} />}
