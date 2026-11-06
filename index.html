@@ -4755,7 +4755,7 @@ function NoteBody({ text }) {
   );
 }
 
-function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSetDecision, onSetPriority, onUpdateAttribute, onUpdateNotes, onUpdateNotesLog, onSetDDDate, onToggleDueDiligence, onToggleServiceOption, onSetServiceContractDate, onSetISPDate, onSetExpectedTCO, onSetDeploymentLiveDate, onSetBillingMilestone, ispCount, consultCount, ispProgram, onOpenIspContracts, rfpProposals, rfpDocs, onOpenRfp, onViewRfp, regionsList, onAddRegion, currentUserEmail, supabaseClient }) {
+function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSetDecision, onSetPriority, onUpdateAttribute, onUpdateNotes, onUpdateNotesLog, onSetDDDate, onToggleDueDiligence, onToggleServiceOption, onSetServiceContractDate, onSetISPDate, onSetExpectedTCO, onSetDeploymentLiveDate, onSetBillingMilestone, ispCount, consultCount, ispProgram, onOpenIspContracts, ispList, onSetTrackedProvider, rfpProposals, rfpDocs, onOpenRfp, onViewRfp, regionsList, onAddRegion, currentUserEmail, supabaseClient }) {
   const [notesOpen, setNotesOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState(null);
@@ -5286,6 +5286,36 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
             </span>
             <button className="btn-primary" onClick={(e) => { e.stopPropagation(); onOpenIspContracts && onOpenIspContracts(); }}>Open repository</button>
           </div>
+          {(() => {
+            const t = ispTrackedTerms(property, ispList || []);
+            if (!t.brandsOnFile.length) return null;
+            const termFor = (b) => t.all.find((x) => x.brand === b);
+            const multi = t.brandsOnFile.length > 1;
+            return (
+              <>
+                {multi && !t.chosen && <div style={{ fontSize: 12, color: "#ffd98a", margin: "4px 2px 2px" }}>⚑ More than one provider on file: mark the one to track for contract expirations (until then, Alerts watch all of them).</div>}
+                {t.brandsOnFile.map((b) => {
+                  const x = termFor(b);
+                  const tracked = t.chosen ? t.chosen === b : !multi;
+                  return (
+                    <div className="contract-date-row" key={b} style={x && x.alert && (tracked || !t.chosen) ? { borderColor: x.term.expired || x.days < 0 ? "#9E3B2E" : "#b08a2e" } : undefined}>
+                      <span className="field-label" style={{ margin: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        {multi ? (
+                          <button className="link" style={{ fontSize: 15, color: t.chosen === b ? "#ffd98a" : "var(--ink-muted)", textDecoration: "none" }}
+                            title={t.chosen === b ? "Tracked provider (click to stop tracking)" : "Track this provider's contract expiration"}
+                            onClick={() => onSetTrackedProvider && onSetTrackedProvider(t.chosen === b ? null : b)}>{t.chosen === b ? "★" : "☆"}</button>
+                        ) : <span style={{ color: "#ffd98a" }} title="Only provider on file: tracked">★</span>}
+                        <span style={{ textTransform: "none", letterSpacing: 0 }}><b>{b}</b>{x ? ` · ${x.contract.agreement_type || "agreement"}` : " · no expiration date on file"}{tracked && <span style={{ opacity: 0.75 }}> · tracked</span>}</span>
+                      </span>
+                      <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        {x && (x.alert ? <IspExpiryPill term={x.term} /> : <span className="mono" style={{ fontSize: 12.5, opacity: 0.85 }}>Term ends {ispDate(x.term.date)}{x.term.rolled ? " (renewal)" : ""}</span>)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </>
+            );
+          })()}
         </div>
 
         <div className="contract-dates-list" style={{ marginBottom: 18 }}>
@@ -8236,6 +8266,171 @@ function IspProgramCell({ c, supabaseClient, onChanged }) {
   );
 }
 // A property's current arrangement: the program of its most recently executed agreement or amendment.
+// ---- Contract expiration alerts ----
+// Provider names vary by legal entity ("Comcast of Houston, LLC", "Comcast
+// Cable Communications Management, LLC"), so contracts are grouped by brand.
+const ISP_BRANDS = [
+  [/comcast|xfinity/i, "Comcast"], [/charter|spectrum|time warner/i, "Spectrum"],
+  [/at\s*&\s*t|bellsouth|southwestern bell|pacific bell/i, "AT&T"], [/verizon|fios/i, "Verizon"],
+  [/google fiber|webpass/i, "Google Fiber"], [/starry/i, "Starry"], [/\bcox\b/i, "Cox"],
+  [/astound|\brcn\b|wave business|grande comm/i, "Astound"], [/zentro|everywhere wireless/i, "Zentro"],
+  [/frontier/i, "Frontier"], [/centurylink|lumen|quantum fiber/i, "Quantum Fiber"], [/altice|optimum|suddenlink/i, "Optimum"],
+  [/mediacom/i, "Mediacom"], [/boingo/i, "Boingo"], [/directv/i, "DIRECTV"], [/\bdish\b/i, "DISH"],
+];
+function ispBrand(name) {
+  const s = String(name || "");
+  for (const [re, b] of ISP_BRANDS) if (re.test(s)) return b;
+  return s.replace(/\(.*?\)/g, "").replace(/,?\s*(inc|llc|l\.l\.c|corp|corporation|co|ltd)\.?\s*$/i, "").trim() || "Unknown provider";
+}
+// Renewal period from the contract's renewal text, so a contract past its
+// stated expiration that auto-renews gets its current term end.
+function ispRenewalPeriod(text) {
+  const t = String(text || "").toLowerCase();
+  if (!t) return null;
+  if (/month[\s-]+to[\s-]+month/.test(t)) return { months: 1, label: "month-to-month" };
+  const W = { one: 1, two: 2, three: 3, four: 4, five: 5, annual: 1 };
+  const num = (x) => (/^\d+$/.test(x) ? +x : W[x] || 0);
+  let m = t.match(/(\d+|one|two|three|four|five)[\s-]+years?\b/) || t.match(/\b(annual)\b/);
+  if (m && num(m[1])) return { months: 12 * num(m[1]), label: `${num(m[1])}-year renewals` };
+  m = t.match(/(\d+)[\s-]+months?[\s-]+(?:period|term|renewal)/);
+  if (m) return { months: +m[1], label: `${m[1]}-month renewals` };
+  m = t.match(/(\d+)[\s-]+days?[\s-]+(?:period|term|renewal)/);
+  if (m) return { days: +m[1], label: `${m[1]}-day renewals` };
+  return null;
+}
+function ispAddPeriod(iso, per) {
+  const d = new Date(iso + "T00:00:00Z");
+  if (per.days) d.setUTCDate(d.getUTCDate() + per.days);
+  else d.setUTCMonth(d.getUTCMonth() + per.months);
+  return d.toISOString().slice(0, 10);
+}
+// The contract's current term end: its expiration date, or (once that has
+// passed) rolled forward by its renewal period. Expired = past expiration
+// with no renewal language we can read.
+function ispTermEnd(c, today = TODAY) {
+  const exp = c && c.expiration_date ? String(c.expiration_date).slice(0, 10) : null;
+  if (!exp) return null;
+  if (exp >= today) return { date: exp, rolled: false };
+  const per = ispRenewalPeriod(c.renewal_terms);
+  if (!per) return { date: exp, expired: true };
+  let d = exp, guard = 0;
+  while (d < today && guard++ < 2000) d = ispAddPeriod(d, per);
+  return { date: d, rolled: true, period: per.label, statedExpiration: exp };
+}
+function ispDaysUntil(iso, today = TODAY) {
+  return Math.round((new Date(iso + "T00:00:00Z") - new Date(today + "T00:00:00Z")) / 86400000);
+}
+function ispTimeLeft(iso) {
+  const d = ispDaysUntil(iso);
+  const span = (n) => (Math.abs(n) < 45 ? `${Math.abs(n)} day${Math.abs(n) === 1 ? "" : "s"}` : `${Math.round(Math.abs(n) / 30.4)} mo`);
+  return d < 0 ? `expired ${span(d)} ago` : d === 0 ? "today" : `in ${span(d)}`;
+}
+const ISP_ALERT_DAYS = 365;
+// Per property, one entry per provider brand: the agreement with the latest
+// expiration (an amendment or renewal supersedes the original), and its
+// current term end.
+function ispProviderTerms(contracts) {
+  const by = {};
+  (contracts || []).filter((c) => c.doc_kind !== "consulting" && c.expiration_date).forEach((c) => {
+    const b = ispBrand(c.provider);
+    if (!by[b] || String(c.expiration_date) > String(by[b].contract.expiration_date)) by[b] = { brand: b, contract: c };
+  });
+  const brandsOnFile = [...new Set((contracts || []).filter((c) => c.doc_kind !== "consulting" && c.provider).map((c) => ispBrand(c.provider)))];
+  const list = Object.values(by).map((x) => {
+    const term = ispTermEnd(x.contract);
+    const days = term ? ispDaysUntil(term.date) : null;
+    return { ...x, term, days, alert: !!term && (term.expired || days <= ISP_ALERT_DAYS) };
+  }).sort((a, b) => (a.term ? a.term.date : "9999").localeCompare(b.term ? b.term.date : "9999"));
+  return { list, brandsOnFile };
+}
+// The provider(s) whose expiration is tracked for a property: the one
+// flagged on the property record, else the only provider on file, else all
+// of them (with a prompt to choose).
+function ispTrackedTerms(property, contracts) {
+  const { list, brandsOnFile } = ispProviderTerms(contracts);
+  const chosen = property && property.program && property.program.trackedProvider;
+  if (chosen) return { terms: list.filter((x) => x.brand === chosen), chosen, needsChoice: false, brandsOnFile, all: list };
+  return { terms: list, chosen: null, needsChoice: brandsOnFile.length > 1, brandsOnFile, all: list };
+}
+function ispExpirationAlerts(properties, ispContracts) {
+  const byCode = {};
+  (ispContracts || []).forEach((c) => { if (c.property_code) (byCode[c.property_code] = byCode[c.property_code] || []).push(c); });
+  const out = [];
+  (properties || []).forEach((p) => {
+    if (computeStatus(p) === "Closed" || !byCode[p.code]) return;
+    const t = ispTrackedTerms(p, byCode[p.code]);
+    const hits = t.terms.filter((x) => x.alert);
+    if (hits.length) out.push({ property: p, hits, needsChoice: t.needsChoice, chosen: t.chosen, soonest: hits[0].term.date });
+  });
+  return out.sort((a, b) => a.soonest.localeCompare(b.soonest));
+}
+function IspExpiryPill({ term, compact }) {
+  if (!term) return null;
+  const d = ispDaysUntil(term.date);
+  const bad = term.expired || d < 0;
+  const soon = !bad && d <= 180;
+  const st = bad ? { background: "#6e2a28", color: "#ffc7c1" } : soon ? { background: "#5a4a1a", color: "#ffd98a" } : { background: "#2b4f66", color: "#d4ecfa" };
+  const txt = term.expired ? `Expired ${ispDate(term.date)}` : `${compact ? "" : "Term ends "}${ispDate(term.date)} · ${ispTimeLeft(term.date)}`;
+  return <span className="pill" style={{ ...st, fontSize: 11, whiteSpace: "nowrap" }} title={term.rolled ? `Stated expiration ${ispDate(term.statedExpiration)}; renewed (${term.period}) to the current term end` : term.expired ? "Past its stated expiration with no renewal terms on file" : "Stated expiration"}>⚑ {txt}{term.rolled ? " (renewal)" : ""}</span>;
+}
+function Bell(p) { return <IconBase {...p}><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></IconBase>; }
+
+function AlertsView({ properties, ispContracts, onOpenProperty }) {
+  const [mode, setModeState] = useState(() => { try { return localStorage.getItem("alertsMode") || "property"; } catch (e) { return "property"; } });
+  const setMode = (m) => { setModeState(m); try { localStorage.setItem("alertsMode", m); } catch (e) {} };
+  const alerts = useMemo(() => ispExpirationAlerts(properties, ispContracts), [properties, ispContracts]);
+  const clientOf = (p) => (p.program.attributes && p.program.attributes.Client) || "No client";
+  const groups = useMemo(() => {
+    const g = {};
+    alerts.forEach((a) => { const k = clientOf(a.property); (g[k] = g[k] || []).push(a); });
+    return Object.entries(g).map(([client, items]) => ({ client, items, soonest: items[0].soonest })).sort((a, b) => a.soonest.localeCompare(b.soonest));
+  }, [alerts]);
+  const row = (a, indent) => a.hits.map((x, i) => (
+    <tr key={`${a.property.id}-${x.brand}`} className="click" onClick={() => onOpenProperty(a.property)} style={indent ? { background: "var(--inset)" } : undefined}>
+      <td style={indent ? { paddingLeft: 34 } : undefined}>{i === 0 ? <><span className="id">{a.property.code}</span> {a.property.name}</> : ""}</td>
+      {!indent && <td>{i === 0 ? clientOf(a.property) : ""}</td>}
+      <td>
+        <b>{x.brand}</b>{a.chosen === x.brand && <span title="Tracked provider for this property" style={{ color: "#ffd98a", marginLeft: 6 }}>★ tracked</span>}
+        {i === 0 && a.needsChoice && <span className="t-chip" style={{ marginLeft: 8 }} title="This property has more than one provider: open it and mark the one to track">choose tracked provider</span>}
+      </td>
+      <td style={{ color: "var(--mut)" }}>{x.contract.agreement_type || "—"}</td>
+      <td><IspExpiryPill term={x.term} compact /></td>
+      <td style={{ color: "var(--mut)", fontSize: 12.5, maxWidth: 360 }}><span className="clamp2" title={x.contract.renewal_terms || ""}>{x.contract.renewal_terms || "—"}</span></td>
+    </tr>
+  ));
+  return (
+    <div className="proto-dash">
+      <div className="wrap">
+        <h1>Alerts</h1>
+        <p className="sub">Tracked provider contracts whose term ends within 12 months, soonest first. A contract past its stated expiration that auto-renews shows its current renewal term end. Open a property to set which provider to track when it has more than one.</p>
+        <div className="toolbar" style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div className="nav" style={{ margin: 0 }} role="tablist" aria-label="View by">
+            <button className={mode === "client" ? "on" : ""} onClick={() => setMode("client")} role="tab" aria-selected={mode === "client"}>Client</button>
+            <button className={mode === "property" ? "on" : ""} onClick={() => setMode("property")} role="tab" aria-selected={mode === "property"}>Property</button>
+          </div>
+          <span style={{ color: "var(--mut)", fontSize: 13 }}>{alerts.length} {alerts.length === 1 ? "property" : "properties"}{mode === "client" ? ` · ${groups.length} ${groups.length === 1 ? "client" : "clients"}` : ""}</span>
+        </div>
+        <div className="tw">
+          <table>
+            <thead><tr><th>{mode === "client" ? "Client / property" : "Property"}</th>{mode === "property" && <th>Client</th>}<th>Provider</th><th>Agreement</th><th>Term ends</th><th>Renewal terms</th></tr></thead>
+            <tbody>
+              {alerts.length === 0 ? (
+                <tr><td colSpan={6} style={{ color: "var(--mut)" }}>No tracked contracts end within 12 months.</td></tr>
+              ) : mode === "property" ? alerts.map((a) => <React.Fragment key={a.property.id}>{row(a, false)}</React.Fragment>)
+                : groups.map((g) => (
+                  <React.Fragment key={g.client}>
+                    <tr className="owner-tr"><td colSpan={5} style={{ fontWeight: 600 }}>{g.client} <span style={{ color: "var(--mut)", fontWeight: 400 }}>· {g.items.length} {g.items.length === 1 ? "property" : "properties"} · soonest {ispDate(g.soonest)}</span></td></tr>
+                    {g.items.map((a) => <React.Fragment key={a.property.id}>{row(a, true)}</React.Fragment>)}
+                  </React.Fragment>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ispCurrentProgram(list) {
   const xs = (list || []).filter((c) => c.doc_kind !== "consulting" && c.program_type)
     .sort((a, b) => String(b.executed_date || b.effective_date || "").localeCompare(String(a.executed_date || a.effective_date || "")));
@@ -12159,6 +12354,11 @@ function App() {
       ...p, program: { ...p.program, serviceContractDates: { ...(p.program.serviceContractDates || {}), [optionKey]: dateStr || null } }
     }));
   };
+  const setTrackedProvider = (brand) => {
+    setProperties((prev) => prev.map((p) => p.id !== programPropertyId ? p : {
+      ...p, program: { ...p.program, trackedProvider: brand || null }
+    }));
+  };
   const setISPDate = (dateStr) => {
     setProperties((prev) => prev.map((p) => p.id !== programPropertyId ? p : {
       ...p, program: { ...p.program, ispContractExecuted: dateStr }
@@ -12397,6 +12597,10 @@ function App() {
             <FileText size={15} /> Change Log
             {(() => { const n = changeLogRows.filter((r) => !r.reviewed && CL_DECISION_ACTIONS.includes(r.action)).length; return n > 0 ? <span className="nav-badge">{n}</span> : null; })()}
           </button>
+          <button className={`btn-ghost ${view === "alerts" ? "on" : ""}`} onClick={() => setView("alerts")} title="Tracked provider contracts ending within 12 months">
+            <Bell size={15} /> Alerts
+            {(() => { const n = ispExpirationAlerts(properties, ispContracts).length; return n > 0 ? <span className="nav-badge">{n}</span> : null; })()}
+          </button>
           <button className="btn-ghost" onClick={() => setDocumentsOpen(true)} title="Shared forms, templates and reference files"><FileText size={15} /> Documents</button>
           <button className="btn-ghost" onClick={() => setImportExportOpen("import")}><FileText size={15} /> Import / Export</button>
           <button className="btn-ghost" onClick={() => { supabaseClient.auth.signOut(); setJustSignedOut(true); }}>Sign out</button>
@@ -12454,6 +12658,9 @@ function App() {
           userEmail={session && session.user ? session.user.email : null} onClose={() => { setIspFor(null); if (ispReturnTo) { setProgramPropertyId(ispReturnTo); setIspReturnTo(null); } }} onChanged={loadIspContracts} onOpenLegislation={openLegislation}
           legisItems={(legislation && legislation.items) || LEGIS_SEED} onApplyToTracker={applyIspToTracker} />
       )}
+      {view === "alerts" && (
+        <AlertsView properties={properties} ispContracts={ispContracts} onOpenProperty={(p) => openProgram(p)} />
+      )}
       {view === "changelog" && (
         <ChangeLogView
           rows={changeLogRows}
@@ -12492,7 +12699,7 @@ function App() {
       )}
 
       {programProperty && !phaseSel && (
-        <ProgramModal property={programProperty} onClose={closeProgram} onOpenPhase={openPhaseFromProgram} onSetManualStatus={setManualStatus} onSetDecision={setDecision} onSetPriority={setPriority} onUpdateAttribute={updateAttribute} onUpdateNotes={updateNotes} onUpdateNotesLog={updateNotesLog} onSetDDDate={setDDDate} onToggleDueDiligence={toggleDueDiligenceSelected} onToggleServiceOption={toggleServiceOption} onSetServiceContractDate={setServiceContractDate} onSetISPDate={setISPDate} onSetExpectedTCO={setExpectedTCO} onSetDeploymentLiveDate={setDeploymentLiveDate} onSetBillingMilestone={setBillingMilestone} ispCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind !== "consulting").length : 0} consultCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind === "consulting").length : 0} ispProgram={programProperty ? ispCurrentProgram(ispContracts.filter((c) => c.property_code === programProperty.code)) : null} onOpenIspContracts={() => { if (!programProperty) return; setIspReturnTo(programPropertyId); setProgramPropertyId(null); setIspFor(programProperty.code); }} rfpProposals={programProperty ? rfpProposals.filter((x) => x.property_code === programProperty.code) : []} rfpDocs={programProperty ? rfpDocs.filter((d) => d.property_code === programProperty.code) : []}
+        <ProgramModal property={programProperty} onClose={closeProgram} onOpenPhase={openPhaseFromProgram} onSetManualStatus={setManualStatus} onSetDecision={setDecision} onSetPriority={setPriority} onUpdateAttribute={updateAttribute} onUpdateNotes={updateNotes} onUpdateNotesLog={updateNotesLog} onSetDDDate={setDDDate} onToggleDueDiligence={toggleDueDiligenceSelected} onToggleServiceOption={toggleServiceOption} onSetServiceContractDate={setServiceContractDate} onSetISPDate={setISPDate} onSetExpectedTCO={setExpectedTCO} onSetDeploymentLiveDate={setDeploymentLiveDate} onSetBillingMilestone={setBillingMilestone} ispCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind !== "consulting").length : 0} consultCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind === "consulting").length : 0} ispProgram={programProperty ? ispCurrentProgram(ispContracts.filter((c) => c.property_code === programProperty.code)) : null} ispList={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code) : []} onSetTrackedProvider={setTrackedProvider} onOpenIspContracts={() => { if (!programProperty) return; setIspReturnTo(programPropertyId); setProgramPropertyId(null); setIspFor(programProperty.code); }} rfpProposals={programProperty ? rfpProposals.filter((x) => x.property_code === programProperty.code) : []} rfpDocs={programProperty ? rfpDocs.filter((d) => d.property_code === programProperty.code) : []}
           onOpenRfp={() => { if (!programProperty) return; setIspReturnTo(programPropertyId); setProgramPropertyId(null); setRfpFor(programProperty.code); }}
           onViewRfp={(d) => { if (d) { rfpOpenDoc(supabaseClient, d).catch((x) => window.alert(`Couldn't open the RFP: ${x.message}`)); } else if (programProperty) { setIspReturnTo(programPropertyId); setProgramPropertyId(null); setRfpFor(programProperty.code); } }} regionsList={regionsList} onAddRegion={addRegion} currentUserEmail={session && session.user ? session.user.email : null} supabaseClient={supabaseClient} />
       )}
