@@ -593,6 +593,22 @@
 .proto-dash .phase-bucket-h{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--mut);font-weight:600;margin:0 2px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:16px}
 .proto-dash .phase-bucket .kpis{grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px}
 .proto-dash .phase-bucket .kpi.zero .v{opacity:.35}
+.proto-dash .bill-flow{padding:14px 16px}
+.proto-dash .bill-flow-top{display:flex;gap:24px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px}
+.proto-dash .bill-total{display:flex;flex-direction:column;align-items:flex-start;background:none;border:0;padding:0;color:var(--txt);cursor:pointer;font-family:inherit;text-align:left}
+.proto-dash .bill-total .k{font-size:12.5px;color:var(--mut)}
+.proto-dash .bill-total .v{font:600 28px var(--mono)}
+.proto-dash .bill-subs{display:flex;flex-direction:column;gap:3px;margin-left:auto;align-items:flex-end}
+.proto-dash .bill-subs button{background:none;border:0;padding:0;color:var(--mut);font:inherit;font-size:13px;cursor:pointer;text-align:right}
+.proto-dash .bill-subs button:hover{color:var(--txt)}
+.proto-dash .bill-subs b{font-family:var(--mono);color:var(--txt);margin-left:4px}
+.proto-dash .bill-subs .sw{display:inline-block;width:18px;height:6px;border-radius:3px;margin-right:7px;vertical-align:2px}
+.proto-dash .bill-bar{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--inset);gap:2px;margin-bottom:12px}
+.proto-dash .bill-bar button{border:0;padding:0;height:100%;cursor:pointer;min-width:3px}
+.proto-dash .bill-bar button:hover{filter:brightness(1.15)}
+.proto-dash .bill-parts{grid-template-columns:repeat(4,1fr)}
+.proto-dash .bill-parts .kpi .k .dot{margin-right:6px}
+@media (max-width:760px){.proto-dash .bill-parts{grid-template-columns:repeat(2,1fr)}.proto-dash .bill-subs{margin-left:0;align-items:flex-start}.proto-dash .bill-subs button{text-align:left}}
 .proto-dash .phase-filter{display:grid;gap:8px;margin:12px 0 10px}
 .proto-dash .pf-bucket{display:grid;grid-template-columns:270px 1fr;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;padding:7px 10px;background:rgba(255,255,255,0.02)}
 @media (max-width:760px){.proto-dash .pf-bucket{grid-template-columns:1fr}}
@@ -2525,9 +2541,10 @@ function legacyHalfBucket(half) {
 const RT_STATUS_BUCKET = { "Past due": "overdue", "Current": "invoiced", "Not invoiced": "pending", "Paid": "paid" };
 const BILLING_STATUS_FILTERS = [
   { key: "all", label: "All statuses" },
-  { key: "due", label: "Payments due (unpaid)" },
-  { key: "pending", label: "Pending" },
+  { key: "due", label: "Still to collect (unpaid)" },
+  { key: "pending", label: "Not yet invoiced" },
   { key: "invoiced", label: "Invoiced (has an invoice date)" },
+  { key: "current", label: "Invoiced, not yet due" },
   { key: "overdue", label: "Overdue" },
   { key: "paid", label: "Paid" },
 ];
@@ -2536,6 +2553,7 @@ function billingStatusMatches(filter, bucket) {
   if (filter === "due") return bucket !== "paid";
   // Invoiced = everything with an invoice date: not yet due, overdue or paid.
   if (filter === "invoiced") return bucket === "invoiced" || bucket === "overdue" || bucket === "paid";
+  if (filter === "current") return bucket === "invoiced";
   return filter === bucket;
 }
 function BillingStatusSelect({ value, onChange }) {
@@ -4317,24 +4335,49 @@ function DashboardView({ properties, allProperties, onNavigate, onOpenProperty, 
         </div>
 
         <div className="sec">Billing{importBilling && <span style={{ fontWeight: 400 }}> · from {importBilling.source}{importBilling.importedAt ? `, imported ${fmtDate(importBilling.importedAt.slice(0, 10))}` : ""}</span>}</div>
-        <div className="kpis">
-          <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("due")} title="Open Billing: all unpaid payments">
-            <div className="v c-a">{money(unpaidTotal)}</div><div className="k">Payments due</div>
-            <div className="n">{billingSummary.unpaidProperties || 0} {billingSummary.unpaidProperties === 1 ? "property" : "properties"} · Pending + unpaid invoices</div>
-          </button>
-          <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("pending")} title="Open Billing: Pending (contracted, future services)">
-            <div className="v">{money(billingSummary.pending)}</div><div className="k">Pending</div><div className="n">Contracted, future services</div>
-          </button>
-          <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("invoiced")} title="Open Billing: everything with an invoice date (paid, overdue or not yet due)">
-            <div className="v c-b">{money(billingSummary.invoiced + billingSummary.overdue + billingSummary.paid)}</div><div className="k">Invoiced</div><div className="n">Everything with an invoice date · {money(billingSummary.invoiced)} not yet due</div>
-          </button>
-          <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("overdue")} title="Open Billing: Overdue">
-            <div className="v c-r">{money(billingSummary.overdue)}</div><div className="k">Overdue</div><div className="n">Over {NET_TERMS_DAYS} days since invoice</div>
-          </button>
-          <button className="kpi" onClick={() => onOpenBilling && onOpenBilling("paid")} title="Open Billing: Paid">
-            <div className="v c-g">{money(billingSummary.paid)}</div><div className="k">Paid</div><div className="n">Collected, not in Payments due</div>
-          </button>
-        </div>
+        {(() => {
+          // Four parts that never overlap and add up to everything contracted.
+          const parts = [
+            { key: "paid", label: "Paid", value: billingSummary.paid || 0, color: "var(--green)", note: "Collected" },
+            { key: "current", label: "Invoiced, not yet due", value: billingSummary.invoiced || 0, color: "var(--blue)", note: `Within ${NET_TERMS_DAYS} days of invoice` },
+            { key: "overdue", label: "Overdue", value: billingSummary.overdue || 0, color: "var(--red)", note: `Over ${NET_TERMS_DAYS} days since invoice` },
+            { key: "pending", label: "Not yet invoiced", value: billingSummary.pending || 0, color: "#6b7a99", note: "Contracted, not billed yet" },
+          ];
+          const total = parts.reduce((s, x) => s + x.value, 0);
+          const invoicedTotal = parts[0].value + parts[1].value + parts[2].value;
+          const pct = (v) => (total ? (v / total) * 100 : 0);
+          return (
+            <div className="card bill-flow">
+              <div className="bill-flow-top">
+                <button className="bill-total" onClick={() => onOpenBilling && onOpenBilling("all")} title="Open Billing: everything">
+                  <span className="k">Contracted to date</span><span className="v">{money(total)}</span>
+                </button>
+                <div className="bill-subs">
+                  <button onClick={() => onOpenBilling && onOpenBilling("invoiced")} title="Open Billing: everything with an invoice date">
+                    <span className="sw" style={{ background: "linear-gradient(90deg,var(--green),var(--blue),var(--red))" }} />Invoiced <b>{money(invoicedTotal)}</b><span style={{ color: "var(--dim)" }}> = paid + not yet due + overdue</span>
+                  </button>
+                  <button onClick={() => onOpenBilling && onOpenBilling("due")} title="Open Billing: everything not yet paid">
+                    <span className="sw" style={{ background: "linear-gradient(90deg,var(--blue),var(--red),#6b7a99)" }} />Still to collect <b className="c-a">{money(unpaidTotal)}</b><span style={{ color: "var(--dim)" }}> = not yet due + overdue + not yet invoiced · {billingSummary.unpaidProperties || 0} {billingSummary.unpaidProperties === 1 ? "property" : "properties"}</span>
+                  </button>
+                </div>
+              </div>
+              <div className="bill-bar" role="img" aria-label={parts.map((x) => `${x.label} ${money(x.value)}`).join(", ")}>
+                {parts.map((x) => x.value > 0 && (
+                  <button key={x.key} style={{ width: pct(x.value) + "%", background: x.color }} onClick={() => onOpenBilling && onOpenBilling(x.key)} title={`${x.label}: ${money(x.value)} (${Math.round(pct(x.value))}%)`} />
+                ))}
+              </div>
+              <div className="kpis bill-parts">
+                {parts.map((x) => (
+                  <button key={x.key} className="kpi" onClick={() => onOpenBilling && onOpenBilling(x.key)} title={`Open Billing: ${x.label}`}>
+                    <div className="v" style={{ color: x.key === "pending" ? "var(--txt)" : x.color }}>{money(x.value)}</div>
+                    <div className="k"><span className="dot" style={{ background: x.color }} />{x.label} <span style={{ color: "var(--dim)" }}>· {Math.round(pct(x.value))}%</span></div>
+                    <div className="n">{x.note}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
 
         <div className="card" style={{ marginTop: 14 }}>
           <h3>Total Contract Value - Life-to-Date</h3>
