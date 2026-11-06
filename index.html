@@ -5308,7 +5308,7 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
                         <span style={{ textTransform: "none", letterSpacing: 0 }}><b>{b}</b>{x ? ` · ${x.contract.agreement_type || "agreement"}` : " · no expiration date on file"}{tracked && <span style={{ opacity: 0.75 }}> · tracked</span>}</span>
                       </span>
                       <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        {x && (x.alert ? <IspExpiryPill term={x.term} /> : <span className="mono" style={{ fontSize: 12.5, opacity: 0.85 }}>Term ends {ispDate(x.term.date)}{x.term.rolled ? " (renewal)" : ""}</span>)}
+                        {x && (x.alert ? <IspExpiryPill term={x.term} /> : <span className="mono" style={{ fontSize: 12.5, opacity: 0.85 }}>Term ends {ispDate(x.term.date)}{x.term.rolled ? ` (${x.term.period})` : ""}</span>)}
                       </span>
                     </div>
                   );
@@ -8371,7 +8371,7 @@ function IspExpiryPill({ term, compact }) {
   const soon = !bad && d <= 180;
   const st = bad ? { background: "#6e2a28", color: "#ffc7c1" } : soon ? { background: "#5a4a1a", color: "#ffd98a" } : { background: "#2b4f66", color: "#d4ecfa" };
   const txt = term.expired ? `Expired ${ispDate(term.date)}` : `${compact ? "" : "Term ends "}${ispDate(term.date)} · ${ispTimeLeft(term.date)}`;
-  return <span className="pill" style={{ ...st, fontSize: 11, whiteSpace: "nowrap" }} title={term.rolled ? `Stated expiration ${ispDate(term.statedExpiration)}; renewed (${term.period}) to the current term end` : term.expired ? "Past its stated expiration with no renewal terms on file" : "Stated expiration"}>⚑ {txt}{term.rolled ? " (renewal)" : ""}</span>;
+  return <span className="pill" style={{ ...st, fontSize: 11, whiteSpace: "nowrap" }} title={term.rolled ? `Stated expiration ${ispDate(term.statedExpiration)}; renewed (${term.period}) to the current term end` : term.expired ? "Past its stated expiration with no renewal terms on file" : "Stated expiration"}>⚑ {txt}{term.rolled ? ` (${term.period})` : ""}</span>;
 }
 function Bell(p) { return <IconBase {...p}><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></IconBase>; }
 
