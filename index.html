@@ -5298,6 +5298,15 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
             if (!t.brandsOnFile.length) return null;
             const termFor = (b) => t.all.find((x) => x.brand === b);
             const multi = t.brandsOnFile.length > 1;
+            // The provider as the repository names it (latest agreement), with the
+            // brand it's grouped under noted only when the name doesn't show it.
+            const nameFor = (b) => {
+              const x = termFor(b);
+              const c = x ? x.contract : (ispList || []).filter((k) => k.doc_kind !== "consulting" && k.provider && ispBrand(k.provider) === b)
+                .sort((p, q) => String(q.executed_date || q.effective_date || "").localeCompare(String(p.executed_date || p.effective_date || "")))[0];
+              const nm = (c && c.provider) || b;
+              return { nm, note: nm.toLowerCase().includes(b.toLowerCase()) ? "" : `now ${b}` };
+            };
             return (
               <>
                 {multi && !t.chosen && <div style={{ fontSize: 12, color: "#ffd98a", margin: "4px 2px 2px" }}>⚑ More than one provider on file: mark the one to track for contract expirations (until then, Alerts watch all of them).</div>}
@@ -5311,8 +5320,12 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
                           <button className="link" style={{ fontSize: 15, color: t.chosen === b ? "#ffd98a" : "var(--ink-muted)", textDecoration: "none" }}
                             title={t.chosen === b ? "Tracked provider (click to stop tracking)" : "Track this provider's contract expiration"}
                             onClick={() => onSetTrackedProvider && onSetTrackedProvider(t.chosen === b ? null : b)}>{t.chosen === b ? "★" : "☆"}</button>
-                        ) : <span style={{ color: "#ffd98a" }} title="Only provider on file: tracked">★</span>}
-                        <span style={{ textTransform: "none", letterSpacing: 0 }}><b>{b}</b>{x ? ` · ${x.contract.agreement_type || "agreement"}` : " · no expiration date on file"}{tracked && <span style={{ opacity: 0.75 }}> · tracked</span>}</span>
+                        ) : <span style={{ color: "#ffd98a" }} title="Only provider on file, so it's tracked automatically">★</span>}
+                        <span style={{ textTransform: "none", letterSpacing: 0 }}>
+                          <b>{nameFor(b).nm}</b>{nameFor(b).note && <span style={{ opacity: 0.7 }}> ({nameFor(b).note})</span>}
+                          {x ? ` · ${x.contract.agreement_type || "agreement"}` : " · no expiration date on file"}
+                          {tracked && <span style={{ opacity: 0.75 }}>{multi ? " · tracked" : " · tracked (only provider on file)"}</span>}
+                        </span>
                       </span>
                       <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         {x && (x.alert ? <IspExpiryPill term={x.term} /> : <span className="mono" style={{ fontSize: 12.5, opacity: 0.85 }}>Term ends {ispDate(x.term.date)}{x.term.rolled ? ` (${x.term.period})` : ""}</span>)}
@@ -8397,7 +8410,7 @@ function AlertsView({ properties, ispContracts, onOpenProperty }) {
       <td style={indent ? { paddingLeft: 34 } : undefined}>{i === 0 ? <><span className="id">{a.property.code}</span> {a.property.name}</> : ""}</td>
       {!indent && <td>{i === 0 ? clientOf(a.property) : ""}</td>}
       <td>
-        <b>{x.brand}</b>{a.chosen === x.brand && <span title="Tracked provider for this property" style={{ color: "#ffd98a", marginLeft: 6 }}>★ tracked</span>}
+        <b>{x.contract.provider || x.brand}</b>{!(x.contract.provider || "").toLowerCase().includes(x.brand.toLowerCase()) && <span style={{ color: "var(--mut)" }}> (now {x.brand})</span>}{a.chosen === x.brand && <span title="Tracked provider for this property" style={{ color: "#ffd98a", marginLeft: 6 }}>★ tracked</span>}
         {i === 0 && a.needsChoice && <span className="t-chip" style={{ marginLeft: 8 }} title="This property has more than one provider: open it and mark the one to track">choose tracked provider</span>}
       </td>
       <td style={{ color: "var(--mut)" }}>{x.contract.agreement_type || "—"}</td>
