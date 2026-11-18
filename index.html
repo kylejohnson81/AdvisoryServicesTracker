@@ -8744,7 +8744,170 @@ async function ispPreparePages(buf, kind) {
   return { pages, note, total, sent: want.length, mode };
 }
 
-// Upload one or more ISP contract PDFs; each is stored, read by Claude, then
+// ---- Word documents (.docx / .doc) for the ISP repository ----
+// Word files are read to plain text here in the browser and sent to Claude as
+// text "pages", the same way a PDF's text-layer pages are. No extra libraries:
+// .docx is a zip (inflated with the browser's DecompressionStream) and .doc is
+// an OLE compound file whose text is found through its piece table.
+const ISP_WORD_RE = /\.(docx|doc)$/i;
+const ISP_WORD_PAGE_CHARS = 3500; // characters per text "page" sent to Claude
+const ispIsWord = (name) => ISP_WORD_RE.test(String(name || ""));
+const ispIsPdf = (name) => /\.pdf$/i.test(String(name || ""));
+const ispMimeOf = (name) => /\.docx$/i.test(name) ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  : /\.doc$/i.test(name) ? "application/msword" : "application/pdf";
+
+async function ispInflateRaw(bytes) {
+  if (typeof DecompressionStream === "undefined") throw new Error("This browser can't open Word files. Update it, or save the file as a PDF.");
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+// Reads the named entries out of a zip (.docx); returns { name: Uint8Array }.
+async function ispUnzip(buf, wanted) {
+  const u8 = new Uint8Array(buf), dv = new DataView(buf);
+  let eocd = -1;
+  for (let i = u8.length - 22; i >= Math.max(0, u8.length - 65557); i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  if (eocd < 0) throw new Error("This doesn't look like a .docx file.");
+  const count = dv.getUint16(eocd + 10, true);
+  let p = dv.getUint32(eocd + 16, true);
+  const out = {}, dec = new TextDecoder();
+  for (let k = 0; k < count && dv.getUint32(p, true) === 0x02014b50; k++) {
+    const method = dv.getUint16(p + 10, true), csize = dv.getUint32(p + 20, true);
+    const nlen = dv.getUint16(p + 28, true), xlen = dv.getUint16(p + 30, true), clen = dv.getUint16(p + 32, true);
+    const local = dv.getUint32(p + 42, true);
+    const name = dec.decode(u8.subarray(p + 46, p + 46 + nlen));
+    p += 46 + nlen + xlen + clen;
+    if (!wanted(name)) continue;
+    const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
+    const data = u8.subarray(start, start + csize);
+    out[name] = method === 0 ? data : await ispInflateRaw(data);
+  }
+  return out;
+}
+const ispXmlText = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(+d)).replace(/&amp;/g, "&");
+// WordprocessingML -> text: one line per paragraph, tabs kept, table cells split by " | ".
+function ispWordXmlToText(xml) {
+  return xml
+    .replace(/<w:tab\/>|<w:tab [^>]*\/>/g, "\t")
+    .replace(/<w:br\/>|<w:br [^>]*\/>|<w:cr\/>/g, "\n")
+    .replace(/<\/w:p>(\s*<[^>]+\/>)*\s*<\/w:tc>/g, " | ").replace(/<\/w:tc>/g, " | ")
+    .replace(/<\/w:p>|<\/w:tr>/g, "\n")
+    .replace(/<w:delText[^>]*>[\s\S]*?<\/w:delText>/g, "") // tracked deletions aren't part of the text
+    .replace(/<w:instrText[^>]*>[\s\S]*?<\/w:instrText>/g, "") // field codes
+    .replace(/<[^>]+>/g, "")
+    .split("\n").map((l) => ispXmlText(l).replace(/[  ]+/g, " ").replace(/\s*\|\s*$/, "").trimEnd()).join("\n");
+}
+async function ispDocxText(buf) {
+  const parts = await ispUnzip(buf, (n) => /^word\/(document|header\d*|footer\d*|footnotes|endnotes)\.xml$/.test(n));
+  if (!parts["word/document.xml"]) throw new Error("This .docx has no document body.");
+  const dec = new TextDecoder();
+  const body = ispWordXmlToText(dec.decode(parts["word/document.xml"]));
+  const extra = Object.keys(parts).filter((n) => n !== "word/document.xml").sort()
+    .map((n) => ispWordXmlToText(dec.decode(parts[n])).trim()).filter(Boolean);
+  return extra.length ? `${body}\n\n[Headers, footers and notes]\n${extra.join("\n")}` : body;
+}
+
+// Minimal OLE compound file reader, enough to pull the streams out of a .doc.
+function ispOleStreams(buf) {
+  const dv = new DataView(buf), u8 = new Uint8Array(buf);
+  if (dv.getUint32(0, true) !== 0xe011cfd0 || dv.getUint32(4, true) !== 0xe11ab1a1) throw new Error("This doesn't look like a Word .doc file.");
+  const ss = 1 << dv.getUint16(0x1e, true), mss = 1 << dv.getUint16(0x20, true);
+  const cutoff = dv.getUint32(0x38, true);
+  const off = (s) => (s + 1) * ss;
+  const END = 0xfffffffe;
+  const difat = [];
+  for (let i = 0; i < 109; i++) { const s = dv.getUint32(0x4c + i * 4, true); if (s < 0xfffffffa) difat.push(s); }
+  for (let s = dv.getUint32(0x44, true), n = dv.getUint32(0x48, true); n-- > 0 && s < 0xfffffffa;) {
+    for (let i = 0; i < ss / 4 - 1; i++) { const x = dv.getUint32(off(s) + i * 4, true); if (x < 0xfffffffa) difat.push(x); }
+    s = dv.getUint32(off(s) + ss - 4, true);
+  }
+  const fat = [];
+  difat.forEach((s) => { for (let i = 0; i < ss / 4; i++) fat.push(dv.getUint32(off(s) + i * 4, true)); });
+  const chain = (start, table) => { const out = []; for (let s = start, g = 0; s !== END && s < table.length && g < table.length; s = table[s], g++) out.push(s); return out; };
+  const readBig = (start, size) => {
+    const out = new Uint8Array(size); let w = 0;
+    for (const s of chain(start, fat)) { const n = Math.min(ss, size - w); if (n <= 0) break; out.set(u8.subarray(off(s), off(s) + n), w); w += n; }
+    return out;
+  };
+  const dirBytes = readBig(dv.getUint32(0x30, true), chain(dv.getUint32(0x30, true), fat).length * ss);
+  const ddv = new DataView(dirBytes.buffer);
+  const entries = [];
+  for (let o = 0; o + 128 <= dirBytes.length; o += 128) {
+    const nl = ddv.getUint16(o + 0x40, true), type = dirBytes[o + 0x42];
+    if (!type) continue;
+    let name = ""; for (let i = 0; i < Math.max(0, nl / 2 - 1); i++) name += String.fromCharCode(ddv.getUint16(o + i * 2, true));
+    entries.push({ name, type, start: ddv.getUint32(o + 0x74, true), size: ddv.getUint32(o + 0x78, true) });
+  }
+  const root = entries.find((e) => e.type === 5);
+  const miniStream = root ? readBig(root.start, root.size) : new Uint8Array(0);
+  const miniFatStart = dv.getUint32(0x3c, true);
+  const miniFatBytes = miniFatStart < 0xfffffffa ? readBig(miniFatStart, chain(miniFatStart, fat).length * ss) : new Uint8Array(0);
+  const mdv = new DataView(miniFatBytes.buffer), miniFat = [];
+  for (let i = 0; i + 4 <= miniFatBytes.length; i += 4) miniFat.push(mdv.getUint32(i, true));
+  const streams = {};
+  entries.filter((e) => e.type === 2).forEach((e) => {
+    if (e.size >= cutoff) { streams[e.name] = readBig(e.start, e.size); return; }
+    const out = new Uint8Array(e.size); let w = 0;
+    for (const s of chain(e.start, miniFat)) { const n = Math.min(mss, e.size - w); if (n <= 0) break; out.set(miniStream.subarray(s * mss, s * mss + n), w); w += n; }
+    streams[e.name] = out;
+  });
+  return streams;
+}
+// .doc (Word 97-2003) text through the piece table in the CLX.
+function ispDocText(buf) {
+  const st = ispOleStreams(buf);
+  const wd = st.WordDocument;
+  if (!wd) throw new Error("This .doc has no Word document stream.");
+  const w = new DataView(wd.buffer, wd.byteOffset, wd.byteLength);
+  if (w.getUint16(0, true) !== 0xa5ec) throw new Error("This .doc format is too old to read. Save it as .docx or PDF and upload that.");
+  if (w.getUint16(0x0a, true) & 0x0100) throw new Error("This .doc is password-protected. Remove the password, or save it as PDF, and upload again.");
+  const table = st[(w.getUint16(0x0a, true) & 0x0200) ? "1Table" : "0Table"];
+  if (!table) throw new Error("This .doc is missing its table stream.");
+  const fcClx = w.getUint32(0x01a2, true), lcbClx = w.getUint32(0x01a6, true);
+  const t = new DataView(table.buffer, table.byteOffset, table.byteLength);
+  let p = fcClx;
+  while (p < fcClx + lcbClx && table[p] === 0x01) p += 3 + t.getUint16(p + 1, true); // skip Prc blocks
+  if (table[p] !== 0x02) throw new Error("Couldn't find the text in this .doc. Save it as .docx or PDF and upload that.");
+  const lcb = t.getUint32(p + 1, true), plc = p + 5, n = (lcb - 4) / 12;
+  let text = "";
+  const cp1252 = new TextDecoder("windows-1252"), utf16 = new TextDecoder("utf-16le");
+  for (let i = 0; i < n; i++) {
+    const cpStart = t.getUint32(plc + i * 4, true), cpEnd = t.getUint32(plc + (i + 1) * 4, true);
+    const fcRaw = t.getUint32(plc + (n + 1) * 4 + i * 8 + 2, true);
+    const len = cpEnd - cpStart;
+    if (fcRaw & 0x40000000) { const fc = (fcRaw & 0x3fffffff) / 2; text += cp1252.decode(wd.subarray(fc, fc + len)); }
+    else text += utf16.decode(wd.subarray(fcRaw, fcRaw + len * 2));
+  }
+  return text
+    .replace(/\u0013[^\u0014\u0015]*\u0014/g, "").replace(/[\u0013\u0015]/g, "") // field codes: keep the shown result only
+    .replace(/\u0007\u0007/g, "\n").replace(/\u0007/g, " | ").replace(/\r|\u000b|\u000c/g, "\n").replace(/[\u0000-\u0008\u000e-\u001f]/g, "")
+    .split("\n").map((l) => l.replace(/[  ]+/g, " ").replace(/\s*\|\s*$/, "").trimEnd()).join("\n");
+}
+// A Word file as prepared "pages" of text, the same shape ispPreparePages returns.
+async function ispPrepareWord(buf, name, kind) {
+  let text = /\.docx$/i.test(name) ? await ispDocxText(buf) : ispDocText(buf);
+  text = text.replace(/\n{3,}/g, "\n\n").trim();
+  if (text.length < 50) throw new Error("No readable text was found in this Word file.");
+  const pages = []; let rest = text;
+  while (rest.length) {
+    let cut = rest.length <= ISP_WORD_PAGE_CHARS ? rest.length : rest.lastIndexOf("\n", ISP_WORD_PAGE_CHARS);
+    if (cut < ISP_WORD_PAGE_CHARS / 2) cut = Math.min(rest.length, ISP_WORD_PAGE_CHARS);
+    pages.push({ n: pages.length + 1, text: rest.slice(0, cut).trim() });
+    rest = rest.slice(cut);
+  }
+  const total = pages.length;
+  // A consulting agreement keeps only its opening and closing sections, as with PDFs.
+  const want = kind === "consulting" && total > 5 ? [...new Set([1, 2, 3, total - 1, total])] : null;
+  const kept = want ? pages.filter((pg) => want.includes(pg.n)) : pages;
+  const label = /\.docx$/i.test(name) ? "Word" : "Word (.doc)";
+  return {
+    pages: kept, total, sent: kept.length,
+    note: `This agreement was uploaded as a ${label} file; "pages" below are sections of its text, not printed pages.${want ? ` Only sections ${want.join(", ")} of ${total} are included (opening and closing sections).` : ""}`,
+    mode: want ? `${label}: ${kept.length} of ${total} sections` : `${label}: ${total} section${total === 1 ? "" : "s"} as text`,
+  };
+}
+
+// Upload one or more ISP contract PDFs or Word files; each is stored, read by Claude, then
 // paired to its tracker property: automatically on a clear high-likelihood
 // match, otherwise from the recommended property (or any other) you confirm.
 const ISP_KINDS = { isp: { label: "ISP agreements", one: "ISP agreement" }, consulting: { label: "Consulting agreements", one: "consulting agreement" } };
@@ -8774,7 +8937,9 @@ function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCo
     const one = async (f, i) => {
       setItem(i, { state: "Checking…" });
       try {
-        if (!/\.pdf$/i.test(f.name) && f.type !== "application/pdf") throw new Error("Only PDF files can be read.");
+        const isWord = ispIsWord(f.name);
+        if (!isWord && !ispIsPdf(f.name) && f.type !== "application/pdf") throw new Error("Only PDF and Word (.docx, .doc) files can be read.");
+        const mime = isWord ? ispMimeOf(f.name) : "application/pdf";
         const buf = await f.arrayBuffer();
         const hash = await ispFileHash(buf);
         if (batchHashes.has(hash)) { setItem(i, { state: "Skipped: same file as another one in this upload", skipped: true }); return; }
@@ -8787,25 +8952,27 @@ function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCo
             // isn't attached yet: attach this file to that record, no new read.
             setItem(i, { state: "Attaching to the contract already on file…" });
             const apath = `isp/${d.property_code || "unpaired"}/${Date.now()}-${f.name.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
-            const aup = await supabaseClient.storage.from(ISP_BUCKET).upload(apath, f, { contentType: "application/pdf", upsert: false });
+            const aup = await supabaseClient.storage.from(ISP_BUCKET).upload(apath, f, { contentType: mime, upsert: false });
             if (aup.error) throw new Error(`Upload failed: ${aup.error.message}`);
             const au = await supabaseClient.from("isp_contracts").update({ file_path: apath, file_size: f.size, uploaded_by: userEmail || null }).eq("id", d.id).select().single();
             if (au.error) throw new Error(`Attaching failed: ${au.error.message}`);
-            setItem(i, { state: `PDF attached to the contract already read${d.property_code ? ` (${d.property_code})` : ""}; no new read needed`, ok: true, attached: true });
+            setItem(i, { state: `${isWord ? "Word file" : "PDF"} attached to the contract already read${d.property_code ? ` (${d.property_code})` : ""}; no new read needed`, ok: true, attached: true });
             if (onChanged) onChanged();
             return;
           }
           setItem(i, { state: `Skipped: already in the repository as "${d.file_name}"${d.property_code ? ` (${d.property_code})` : ""}`, skipped: true }); return;
         }
         setItem(i, { state: "Preparing pages…" });
-        const prep = await ispPreparePages(buf, docKind);
+        const prep = isWord ? await ispPrepareWord(buf, f.name, docKind) : await ispPreparePages(buf, docKind);
         const folder = code === "auto" ? "unpaired" : code;
         const path = `isp/${folder}/${Date.now()}-${f.name.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
         setItem(i, { state: `Uploading… (${prep.mode})` });
-        const up = await supabaseClient.storage.from(ISP_BUCKET).upload(path, f, { contentType: "application/pdf", upsert: false });
+        const up = await supabaseClient.storage.from(ISP_BUCKET).upload(path, f, { contentType: mime, upsert: false });
         if (up.error) throw new Error(`Upload failed: ${up.error.message}`);
         const prepPath = `${path}.prep.json`;
         const up2 = await supabaseClient.storage.from(ISP_BUCKET).upload(prepPath, new Blob([JSON.stringify({ pages: prep.pages, note: prep.note })], { type: "application/json" }), { contentType: "application/json", upsert: false });
+        // A Word file can only be read from its prepared text (the reader takes the original as a PDF otherwise).
+        if (up2.error && isWord) { await supabaseClient.storage.from(ISP_BUCKET).remove([path]); throw new Error(`Upload failed: ${up2.error.message}`); }
         const ins = await supabaseClient.from("isp_contracts").insert([{ doc_kind: docKind, property_code: null, file_path: path, file_name: f.name, file_size: f.size, status: "pending", uploaded_by: userEmail || null,
           file_sha256: hash, prep_path: up2.error ? null : prepPath, pages_total: prep.total, pages_sent: prep.sent, read_mode: up2.error ? "Whole PDF" : prep.mode }]).select().single();
         if (ins.error) throw new Error(`Saving failed: ${ins.error.message}`);
@@ -8858,10 +9025,10 @@ function IspUploadPanel({ properties, supabaseClient, userEmail, fixedPropertyCo
           <button key={k} disabled={busy} onClick={() => setKind(k)} style={{ padding: "6px 14px", borderRadius: 8, cursor: "pointer", fontWeight: kind === k ? 600 : 400, border: `1px solid ${kind === k ? "#2f6fd0" : "var(--border, #2c4170)"}`, background: kind === k ? "#2f6fd0" : "transparent", color: kind === k ? "#fff" : "inherit" }}>{v.label}</button>
         ))}
       </div>
-      <input ref={fileRef} type="file" accept="application/pdf,.pdf" multiple style={{ display: "none" }} onChange={onFiles} />
-      <button className="btn-primary" disabled={busy} onClick={() => fileRef.current && fileRef.current.click()}>{busy ? "Working…" : `Upload ${ISP_KINDS[kind].one} PDFs…`}</button>
+      <input ref={fileRef} type="file" accept="application/pdf,.pdf,.docx,.doc,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword" multiple style={{ display: "none" }} onChange={onFiles} />
+      <button className="btn-primary" disabled={busy} onClick={() => fileRef.current && fileRef.current.click()}>{busy ? "Working…" : `Upload ${ISP_KINDS[kind].one}s (PDF or Word)…`}</button>
       {counts.total > 0 && <span style={{ marginLeft: 10, fontSize: 13, opacity: 0.85 }}>{counts.done} of {counts.total} done{counts.pick ? ` · ${counts.pick} need a property` : ""}{counts.skip ? ` · ${counts.skip} duplicate${counts.skip === 1 ? "" : "s"} skipped` : ""}{counts.err ? ` · ${counts.err} failed` : ""}{counts.wait ? ` · ${counts.wait} in progress` : ""}</span>}
-      <div className="dim" style={{ fontSize: 11.5, marginTop: 6 }}>Select or drag in as many PDFs as you like; they're read {ISP_CONCURRENCY} at a time, and files already in the repository are skipped. To keep reads small, pages with a text layer go as text, scanned pages as reduced images, and consulting agreements send only their first 3 and last 2 pages. ISP agreements get the full due diligence read; consulting agreements get a light read (consultant, owner, dates, term, scope) to pair and flag them. Each PDF is read by Claude, then paired to its tracker property using the name, street address, city, state, ZIP, units and owner entity in the contract. A clear match pairs automatically; otherwise you confirm the recommended property or pick the right one. Conflicts on state, ZIP, street address or units are flagged.</div>
+      <div className="dim" style={{ fontSize: 11.5, marginTop: 6 }}>Select or drag in as many PDFs or Word files (.docx, .doc) as you like; they're read {ISP_CONCURRENCY} at a time, and files already in the repository are skipped. To keep reads small, pages with a text layer go as text, scanned pages as reduced images, and consulting agreements send only their first 3 and last 2 pages. Word files are read as text. ISP agreements get the full due diligence read; consulting agreements get a light read (consultant, owner, dates, term, scope) to pair and flag them. Each file is read by Claude, then paired to its tracker property using the name, street address, city, state, ZIP, units and owner entity in the contract. A clear match pairs automatically; otherwise you confirm the recommended property or pick the right one. Conflicts on state, ZIP, street address or units are flagged.</div>
       {items.length > 0 && (
         <div style={{ marginTop: 10, fontSize: 13 }}>
           {items.map((x, i) => (
@@ -8936,14 +9103,14 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
     if (await save(patch)) setEdit(false);
   };
   const reread = async () => {
-    if (!window.confirm("Read this PDF again with Claude? Extracted fields will be replaced (notes and the property link are kept).")) return;
+    if (!window.confirm("Read this contract again with Claude? Extracted fields will be replaced (notes and the property link are kept).")) return;
     setBusy(true); setMsg("Reading with Claude… (about a minute)");
     try { const d = await ispExtract(supabaseClient, c.id); if (d) setC(d); setMsg(null); if (onChanged) onChanged(); }
     catch (x) { setMsg(x.message || String(x)); }
     setBusy(false);
   };
   const remove = async () => {
-    if (!window.confirm(`Delete this ${consulting ? "consulting agreement" : "ISP contract"} (${ispPartyOf(c) || c.file_name}) and its PDF? This can't be undone.`)) return;
+    if (!window.confirm(`Delete this ${consulting ? "consulting agreement" : "ISP contract"} (${ispPartyOf(c) || c.file_name}) and its file? This can't be undone.`)) return;
     setBusy(true);
     const { error } = await supabaseClient.from("isp_contracts").delete().eq("id", c.id);
     if (!error && c.file_path) await supabaseClient.storage.from(ISP_BUCKET).remove([c.file_path, c.prep_path].filter(Boolean));
@@ -8951,7 +9118,7 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
     if (error) { setMsg(`Couldn't delete: ${error.message}`); return; }
     if (onChanged) onChanged(); onClose();
   };
-  const openPdf = async () => { try { await ispOpenPdf(supabaseClient, c); } catch (x) { setMsg(`Couldn't open the PDF: ${x.message}`); } };
+  const openPdf = async () => { try { await ispOpenPdf(supabaseClient, c); } catch (x) { setMsg(`Couldn't open the file: ${x.message}`); } };
 
   const groups = useMemo(() => {
     const g = new Map();
@@ -8991,10 +9158,10 @@ function IspContractDetail({ contract, properties, supabaseClient, onClose, onCh
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", margin: "6px 0 12px" }}>
           <IspStatusPill c={c} />
-          {c.file_path && <button className="btn-ghost" onClick={openPdf}>View PDF</button>}
+          {c.file_path && <button className="btn-ghost" onClick={openPdf} title={ispIsWord(c.file_name || c.file_path) ? "Word files download and open in Word" : undefined}>{ispIsWord(c.file_name || c.file_path) ? "Download Word file" : "View PDF"}</button>}
           {st && onOpenLegislation && <button className="btn-ghost" onClick={() => onOpenLegislation(st)} title={`Open the Client Map on ${US_STATE_NAMES[st]} with its legislation`}>View {US_STATE_NAMES[st]} legislation →</button>}
           {!edit && <button className="btn-ghost" onClick={startEdit} disabled={busy}>Edit fields</button>}
-          {c.status === "done" && <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}><input type="checkbox" checked={!!c.verified} disabled={busy} onChange={(e) => save({ verified: e.target.checked })} /> Verified against the PDF</label>}
+          {c.status === "done" && <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}><input type="checkbox" checked={!!c.verified} disabled={busy} onChange={(e) => save({ verified: e.target.checked })} /> Verified against the {ispIsWord(c.file_name || c.file_path) ? "document" : "PDF"}</label>}
           <span style={{ flex: 1 }} />
           <button className="btn-ghost" onClick={reread} disabled={busy || !c.file_path}>Read again</button>
           <button className="btn-ghost" onClick={remove} disabled={busy} style={{ color: "#ff8f86" }}>Delete</button>
