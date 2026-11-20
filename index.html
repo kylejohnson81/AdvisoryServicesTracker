@@ -10766,6 +10766,26 @@ function ChangeLogView({ rows, loading, error, onRefresh, properties, setPropert
     await patchRow(row.id, { reviewed: true, reviewed_by: me, reviewed_at: now(), applied_at: now(), applied_by: me, apply_result: "Not in master", undo });
   });
 
+  // For a property Greystar no longer manages (or never will, e.g. a third-party
+  // managed client) that is still an active client or prospect: keep it open, move
+  // the retired Yardi code to "Former Yardi Code" for history, and mark it not in
+  // master, so the daily sync stops flagging the retired code. If Greystar picks
+  // the property back up, the sync re-links it by address automatically.
+  const markNotGreystarManaged = (row) => run(row, async () => {
+    const p = byCode[row.property_code]; if (!p) throw new Error("property not found");
+    const a = p.program.attributes || {};
+    const keys = ["Yardi Code", "Former Yardi Code", "Master Status", "Source of Record", "Management"];
+    const undo = { ...snapshot(p, keys), message: "Marked no longer Greystar managed" };
+    const y = a["Yardi Code"] || "";
+    const former = y && a["Former Yardi Code"] && a["Former Yardi Code"] !== y ? `${a["Former Yardi Code"]}; ${y}` : (y || a["Former Yardi Code"] || "");
+    const src = (a["Source of Record"] || "") === "" || a["Source of Record"] === "Master" ? "Manual" : a["Source of Record"];
+    updateProgram(p.code, (pp) => ({ program: { ...pp.program, attributes: { ...(pp.program.attributes || {}), "Yardi Code": "", ...(former ? { "Former Yardi Code": former } : {}), "Master Status": "Not in master", "Source of Record": src, "Management": "Not Greystar managed" } } }));
+    const logs = [{ property_code: p.code, property_name: p.name, action: "info", field: "Master Status", old_value: a["Master Status"] || null, new_value: "Not in master", reason: "No longer Greystar managed — kept open as a client/prospect (Change Log)" }];
+    if (y) logs.unshift({ property_code: p.code, property_name: p.name, action: "update", field: "Yardi Code", old_value: y, new_value: "", reason: `Moved to Former Yardi Code — no longer Greystar managed (Change Log)` });
+    await logRows(logs);
+    await patchRow(row.id, { reviewed: true, reviewed_by: me, reviewed_at: now(), applied_at: now(), applied_by: me, apply_result: "No longer Greystar managed", undo });
+  });
+
   // New-property proposals from the notes digest (action "flag", field "New property",
   // property_code "NEW"). Nothing exists in the tracker until one of these is chosen.
   const addProspect = (row, yardi) => run(row, async () => {
@@ -11012,6 +11032,7 @@ function ChangeLogView({ rows, loading, error, onRefresh, properties, setPropert
         const gone = masterCache[c] === null;
         out.push(<Btn key={`l-${c}`} primary={cands.length === 1} disabled={gone} onClick={() => { if (window.confirm(`Link ${p.code} ${p.name} to ${c} (${label(c)})? Master values replace the address and contacts; Client is not changed.`)) linkMaster(r, c); }}>{gone ? `${c} no longer in master` : `Link to ${c}`}</Btn>);
       });
+      if ((p.program.attributes || {})["Yardi Code"]) out.push(<Btn key="ngm" onClick={() => { if (window.confirm(`Keep ${p.name} open as a client/prospect that Greystar no longer manages?\n\nIts Yardi code ${(p.program.attributes || {})["Yardi Code"]} moves to Former Yardi Code and it is marked not in master, so this flag stops coming back.`)) markNotGreystarManaged(r); }}>No longer Greystar managed</Btn>);
       out.push(<Btn key="nim" onClick={() => { if (window.confirm(`Mark ${p.name} not in master${(p.program.attributes || {})["Yardi Code"] ? " and clear its Yardi code" : ""}?`)) markNotInMaster(r); }}>Not in master</Btn>);
       out.push(<Btn key="close" onClick={() => { if (window.confirm(`Close ${p.name}?`)) closeProperty(r, `Location: ${r.reason}`); }}>Close property</Btn>);
       out.push(<Btn key="rev" onClick={() => markReviewed(r, "Dismissed")}>Dismiss</Btn>);
