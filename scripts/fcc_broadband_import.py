@@ -185,12 +185,34 @@ def main():
     print(f"{len(todo)} properties to refresh across {len(blocks)} states")
 
     files = fcc_get(f"downloads/listAvailabilityData/{as_of}?category=State&subcategory=Fixed%20Broadband").json().get("data", [])
+    if not files:
+        files = fcc_get(f"downloads/listAvailabilityData/{as_of}").json().get("data", [])
+    print(f"FCC file list: {len(files)} entries")
+    if files:
+        print("  fields:", sorted(files[0].keys()))
+        kinds = sorted({(str(f.get("category")), str(f.get("subcategory")), str(f.get("technology_type"))) for f in files})
+        print("  kinds:", kinds[:15])
+
+    def lo(v):
+        return str(v or "").lower()
+
+    def is_state_fixed(f):
+        if f.get("category") and lo(f.get("category")) != "state":
+            return False
+        text = lo(f.get("subcategory")) + " " + lo(f.get("technology_type")) + " " + lo(f.get("file_name"))
+        return "fixed" in text and "mobile" not in text
+
+    files = [f for f in files if is_state_fixed(f)]
+    print(f"  {len(files)} state fixed-broadband files")
     # rows kept: by block and by hex -> list of (location_id, brand, tech_code, down, up, low_latency)
     by_block = defaultdict(list)
     by_hex = defaultdict(list)
     for f in files:
-        fips = str(f.get("state_fips") or "").zfill(2)
-        tech = int(f.get("technology_code") or 0)
+        fips = str(f.get("state_fips") or f.get("state_code") or f.get("fips") or "").zfill(2)
+        try:
+            tech = int(f.get("technology_code") or f.get("technology") or 0)
+        except (TypeError, ValueError):
+            tech = 0
         if fips not in blocks or tech in SKIP_TECH:
             continue
         want_b, want_h = blocks[fips], hexes[fips]
