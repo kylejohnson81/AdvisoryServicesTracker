@@ -481,6 +481,35 @@
         .dual-todo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
         .dual-todo-tile { min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 14px; background: var(--panel-alt); }
         @media (max-width: 760px) { .dual-todo-grid { grid-template-columns: 1fr; } }
+        /* Checklist v2 — two-column checklist + tracker data panel */
+        .cl2-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 22px; align-items: start; }
+        @media (max-width: 900px) { .cl2-grid { grid-template-columns: 1fr; } }
+        .cl2-side { position: sticky; top: 0; max-height: 72vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 2px; }
+        .cl2-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; background: var(--panel-alt); transition: box-shadow .15s, border-color .15s; }
+        .cl2-card-focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0,119,212,.35); }
+        .cl2-card-title { font-size: 11px; text-transform: uppercase; letter-spacing: .6px; opacity: .8; margin-bottom: 6px; font-weight: 600; }
+        .cl2-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 3px 0; border-bottom: 1px dashed rgba(255,255,255,.07); font-size: 12.5px; }
+        .cl2-row:last-child { border-bottom: 0; }
+        .cl2-key { font-size: 11px; opacity: .75; white-space: nowrap; }
+        .cl2-val { font-size: 12.5px; word-break: break-word; }
+        .cl2-editable { background: none; border: 0; color: inherit; padding: 1px 4px; border-radius: 4px; cursor: text; text-align: right; font: inherit; }
+        .cl2-editable:hover { background: rgba(255,255,255,.08); outline: 1px dashed rgba(255,255,255,.25); }
+        .cl2-input { background: var(--panel); color: inherit; border: 1px solid var(--accent); border-radius: 4px; padding: 3px 6px; font: inherit; font-size: 12.5px; max-width: 100%; }
+        .cl2-section { font-size: 10.5px; text-transform: uppercase; letter-spacing: .7px; font-weight: 700; opacity: .7; margin: 14px 0 4px; padding-bottom: 3px; border-bottom: 1px solid var(--border); }
+        .cl2-section:first-child { margin-top: 2px; }
+        .cl2-guide { font-size: 11.5px; font-style: italic; color: #ffe8a8; background: rgba(255,217,114,.08); border-left: 2px solid rgba(255,217,114,.55); padding: 4px 8px; border-radius: 0 4px 4px 0; margin-top: 4px; }
+        .cl2-guide-todo { margin: 2px 0 4px 24px; }
+        .cl2-guide li { margin-bottom: 3px; }
+        .cl2-todo-focus { background: rgba(0,119,212,.10); border-radius: 6px; }
+        .cl2-skip-tag { font-size: 10px; margin-left: 6px; padding: 0 5px; border-radius: 4px; background: #3a4a6e; color: #d6e0f3; text-transform: uppercase; }
+        .cl2-empty { font-size: 12px; padding: 2px 0; }
+        .cl2-link { background: none; border: 0; padding: 0; color: #8cc8ff; cursor: pointer; font: inherit; font-size: 12px; white-space: nowrap; text-decoration: underline; }
+        .cl2-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 3px 0; cursor: pointer; }
+        .cl2-details { border-top: 1px solid rgba(255,255,255,.08); padding: 4px 0; }
+        .cl2-details > summary { cursor: pointer; font-size: 12.5px; font-weight: 600; padding: 3px 0; }
+        .cl2-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+        .cl2-table th { text-align: left; opacity: .7; font-weight: 600; padding: 3px 4px; border-bottom: 1px solid var(--border); }
+        .cl2-table td { padding: 3px 4px; border-bottom: 1px dashed rgba(255,255,255,.07); }
         .todo-block { padding: 4px 0; border-bottom: 1px solid var(--grid-line); }
         .todo-block:last-child { border-bottom: none; }
         .todo-item { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 0; }
@@ -1431,7 +1460,9 @@ function fillEmailTemplate(s, property) {
     .replace(/\{\{property\}\}/g, property.name)
     .replace(/\{\{client\}\}/g, property.program.attributes.Client || "")
     .replace(/\{\{manager\}\}/g, property.program.attributes["CM"] || "")
-    .replace(/\{\{code\}\}/g, property.code);
+    .replace(/\{\{code\}\}/g, property.code)
+    .replace(/\{\{rpmEmail\}\}/g, property.program.attributes["RPM Email"] || "")
+    .replace(/\{\{cmEmail\}\}/g, property.program.attributes["CM Email"] || "");
 }
 
 // Builds a mailto: link from a to-do's email template, substituting
@@ -1456,17 +1487,35 @@ const PROSPECTING_COLOR = "#FBF7EF"; // near-white, lightened from Stucco
 // the Due Diligence contract has been executed. This is shown both for
 // pure prospects (no DD signed at all) and for the pre-engagement lead
 // time on properties that have since signed DD — same underlying work.
+// Checklist v2 (11-23 workflow meeting). Each to-do can carry:
+//   section  — group header it sits under
+//   guide    — TEMPORARY guidance note from the meeting (hide/show with the
+//              "Guidance" switch; delete the `guide` fields once settled)
+//   panel    — which right-hand panel(s) of tracker data it pulls in
+//   optional — can be skipped (order is flexible / doesn't always apply)
+//   derived  — set automatically from tracker data, not clicked
+const CHECKLIST_VERSION = 2;
+const GMO_TEMPLATE_LABEL = "GMO engagement notice";
 function prospectingTemplate(done) {
   return [
-    { text: "Identify property as a prospect", responsible: "Advisory Services", done },
-    { text: "Initial contact / outreach to ownership/management", responsible: "Advisory Services", done },
-    { text: "Introduce Greystar Advisory Services offering", responsible: "Advisory Services", done },
-    { text: "Schedule discovery call", responsible: "Advisory Services", done },
-    { text: "Gauge interest in a Due Diligence engagement", responsible: "Advisory Services", done },
-    { text: "Tracker input — if no further discussion, enter owner and property details and mark the opportunity closed", responsible: "ROVR", done },
-    { text: "Tracker input — if client wants to proceed, enter owner and property details in master tracker, send client intake form to client, request ISP contracts for each property", responsible: "Advisory Services", done },
-    { text: "Follow up as needed", responsible: "Advisory Services", done },
-    { text: PROSPECT_TO_CONTRACTING_STEP, responsible: "Advisory Services", done }
+    { section: "Discovery", text: "Initial contact / outreach to ownership/management", responsible: "Advisory Services", optional: true, panel: ["contacts"],
+      guide: "Steps in Discovery can happen in any order, or be skipped, depending on how the client was referred.", done },
+    { section: "Discovery", text: "Introduce Greystar Advisory Services offering", responsible: "Advisory Services", optional: true, done },
+    { section: "Discovery", text: "Discovery call scheduled and held", responsible: "Advisory Services", optional: true, panel: ["callNotes"], done },
+    { section: "Discovery", text: "Contract PDF sent after discovery call", responsible: "Advisory Services", panel: ["contractDocs"],
+      guide: "Send the advisory contract PDF once the discovery call is done.", done },
+    { section: "Discovery", text: "Intake form and services one-pager sent (prospects without a PMA)", responsible: "Advisory Services", optional: true, panel: ["intake"],
+      guide: "Only for prospects with no existing PMA. Skip it when the PMA already gives us the information. Templates: Eileen (owner TBD).",
+      emailTemplates: [{ label: "Intake + services overview", subject: "Greystar Advisory Services — Intake Form & Overview — {{property}}", body: "Hi,\n\nThank you for your time. Attached are our client intake form and a one-page overview of Greystar Advisory Services for {{property}}.\n\nOnce the intake form is back, we'll confirm scope and next steps.\n\nBest,\nGreystar Advisory Services" }], done },
+    { section: "Discovery", text: "Additional client needs reviewed (project oversight / building technology)", responsible: "Advisory Services", panel: ["discoveryFlags"],
+      guide: "Flag needs outside advisory scope so Scott can filter for follow-up.", done },
+    { section: "Discovery", text: "Greystar Managed Operations notified of owner engagement", responsible: "Advisory Services", panel: ["contacts"],
+      guide: "Open: send at contracting, or earlier for some existing properties? Label the correspondence with the template name.",
+      emailTemplates: [{ label: GMO_TEMPLATE_LABEL, to: "", subject: "[GMO engagement notice] Owner engaging Advisory Services — {{property}}", body: "Hi team,\n\nHeads up that ownership ({{client}}) is engaging Greystar Advisory Services for {{property}} ({{code}}). We'll keep you posted on scope and timing so the property team isn't caught off guard.\n\nBest,\nGreystar Advisory Services" }], done },
+    { section: "Next Steps", text: "Client and property details reviewed and verified in tracker", responsible: "Advisory Services", panel: ["property"],
+      guide: "Digest-added prospects can arrive with partial client/property info. Verify here (no separate Tracker Input section).", done },
+    { section: "Next Steps", text: "Follow up as needed", responsible: "Advisory Services", optional: true, done },
+    { section: "Next Steps", text: PROSPECT_TO_CONTRACTING_STEP, responsible: "Advisory Services", done }
   ];
 }
 // Phase trigger: checking this Prospecting to-do moves the client into
@@ -1589,7 +1638,11 @@ function buildPhases(program) {
   if (ddSelected) {
     const ddStart = (program.serviceContractDates && program.serviceContractDates.rfp) || advisoryStart;
     const ddDef = PHASE_DEFS[0];
-    const ddData = program.phaseData.dueDiligence || { done: false, todos: defaultTodosFor("dueDiligence") };
+    const ddStored = program.phaseData.dueDiligence || { done: false, todos: defaultTodosFor("dueDiligence") };
+    // Scope selected and Client selected next step are derived (contract
+    // import / the next-step dropdown), so done-ness reads the effective list.
+    const ddTodos = effectiveTodosFor(program, "dueDiligence", ddStored.todos);
+    const ddData = { ...ddStored, todos: ddTodos, done: !!ddStored.done || todosAllDone(ddTodos) };
     const ddCalcEnd = addDays(ddStart, dur("dueDiligence"));
     const ddEnd = actualEnd(ddData.done, ddData.completedDate, ddCalcEnd);
     phases.push({ ...ddDef, start: ddStart, end: ddEnd, defaultDeadline: ddCalcEnd, ...ddData, durationNote: durNote("dueDiligence") });
@@ -1860,29 +1913,38 @@ function computeStatus(property) {
 // uniformly per property based on whether that phase is already complete —
 // `responsible` is just the default owner; any stakeholder can be reassigned.
 function ddTemplate(done) {
+  const findings = [
+    { label: "Standard", subject: "Due Diligence Findings & Recommendation — {{property}}", body: "Hi,\n\nWe have completed Due Diligence for {{property}} and wanted to share our findings, service options and economic modeling ahead of our next conversation.\n\nPlease let us know if you have any questions before we connect.\n\nBest,\nGreystar Advisory Services" },
+    { label: "Brief summary", subject: "Quick Update — {{property}} Due Diligence Complete", body: "Hi,\n\nQuick note that Due Diligence for {{property}} is complete and the findings are ready whenever you would like to connect.\n\nBest,\nGreystar Advisory Services" }
+  ];
   return [
-    { text: "Gather all necessary property information for Due Diligence agreement contracting", responsible: "Advisory Services", done },
-    { text: "NSC drafts agreement for business unit review", responsible: "NSC", toggleWith: "Advisory Services", rounds: 0, approvalGate: true, emailTemplates: [{ label: "Standard", subject: "Request: NSC Agreement Drafting — {{property}}", body: "Hi,\n\nRequesting NSC begin drafting the Due Diligence agreement for {{property}}.\n\nBest,\nGreystar Advisory Services" }], done },
-    { text: "Draft agreement sent to client for review", responsible: "Client Services", toggleWith: "Client", rounds: 0, approvalGate: true, emailTemplates: [{ label: "Standard", subject: "Draft Agreement Ready for Your Review — {{property}}", body: "Hi,\n\nThe draft agreement for {{property}} is ready for your review. Please let us know if you have any questions or edits.\n\nBest,\nGreystar Advisory Services" }], done },
-    { text: "NSC finalizes agreement for execution", responsible: "NSC", emailTemplates: [{ label: "Standard", subject: "Please Finalize Agreement for Execution — {{property}}", body: "Hi,\n\nRequesting NSC finalize the agreement for {{property}} so it can move to execution.\n\nBest,\nGreystar Advisory Services" }], done },
-    { text: "Contract out for signatures", responsible: "Client Services", emailTemplates: [
-      { label: "Standard", subject: "Signature Requested — {{property}} Agreement", body: "Hi,\n\nThe agreement for {{property}} is ready for signature. Please let us know if you have any questions.\n\nThank you for your partnership.\n\nBest,\nGreystar Advisory Services" },
-      { label: "Follow-up / reminder", subject: "Following Up — Signature Needed for {{property}}", body: "Hi,\n\nJust following up on the agreement for {{property}}, still pending signature. Let us know if anything is holding it up on your end.\n\nThanks,\nGreystar Advisory Services" }
-    ], done },
-    { text: "Advisory Services contract executed", responsible: "Client", emailTemplates: [{ label: "Standard", subject: "Confirmation: Due Diligence Agreement Executed — {{property}}", body: "Hi,\n\nConfirming the Due Diligence agreement for {{property}} has been executed.\n\nBest,\nGreystar Advisory Services" }], done },
-    { text: "Begin property & contract due diligence", responsible: "ROVR", emailTemplates: [{ label: "Standard", subject: "Due Diligence Kickoff — {{property}}", body: "Hi,\n\nWe are officially beginning property and contract Due Diligence for {{property}}. We will follow up as we make progress.\n\nBest,\nGreystar Advisory Services" }], done },
-    { text: "Obtain necessary property contracts and relevant agreements. Engage outside counsel to see if they have the incumbent contracts on file", responsible: "Advisory Services", emailTemplates: [{ label: "Standard", subject: "Requesting Property Contracts & Agreements — {{property}}", body: "Hi,\n\nCould you send over the existing property contracts and relevant agreements for {{property}} so we can proceed with our review?\n\nBest,\nGreystar Advisory Services" }], done },
-    { text: "Enter contracts into master tracker, add property notes, update program status, track down missing contracts with property", responsible: "ROVR", done },
-    { text: "Engage with outside counsel for high level review of existing agreements and intro/discussion with client for assistance with new ISP contract", responsible: "Advisory Services", done },
-    { text: "Generate client export from master tracker and financial modeling spreadsheet (baseline model)", responsible: "Advisory Services", done },
-    { text: "Review agreements", responsible: "Advisory Services", done },
-    { text: "Create recommendation", responsible: "Advisory Services", done },
-    { text: "Present findings to client", responsible: "Advisory Services", emailTemplates: [
-      { label: "Standard", subject: "Due Diligence Findings & Recommendation — {{property}}", body: "Hi,\n\nWe have completed Due Diligence for {{property}} and wanted to share our findings and recommendation ahead of our next conversation.\n\nPlease let us know if you have any questions before we connect.\n\nBest,\nGreystar Advisory Services" },
-      { label: "Brief summary", subject: "Quick Update — {{property}} Due Diligence Complete", body: "Hi,\n\nQuick note that Due Diligence for {{property}} is complete and the findings are ready whenever you would like to connect.\n\nBest,\nGreystar Advisory Services" }
-    ], done }
+    { section: "Scope", text: DD_SCOPE_STEP, responsible: "Advisory Services", derived: true, panel: ["terms", "billing"],
+      guide: "Fills itself from the Ironclad contract import. The DD fee invoice is handled by billing automation, not a manual to-do.", done },
+    { section: "Contract collection", text: "ISP contracts requested for each property", responsible: "Advisory Services", toggleWith: "Client Services", rounds: 0, panel: ["contacts", "ispRequest"],
+      guide: "Send to the RPM + responsible Client Services member. If nothing comes back, use the escalation template (copies the client). Escalation timing still open.",
+      emailTemplates: [
+        { label: "Initial request (RPM + Client Services)", to: "{{rpmEmail}}", subject: "ISP Contracts Needed — {{property}}", body: "Hi,\n\nAs part of Greystar Advisory Services Due Diligence for {{property}}, we need copies of every ISP / telecom agreement in place at the property (internet, TV, Wi-Fi, rights of entry, marketing agreements).\n\n[Scott's property-contract collection instructions]\n\nFCC map: you can check providers reported at the address at https://broadbandmap.fcc.gov.\n\nPlease upload contracts and answer the telecom questions here: [Formstack link]\n\nThank you,\nGreystar Advisory Services" },
+        { label: "Escalation (copy client)", to: "{{rpmEmail}}", subject: "Follow-Up: ISP Contracts Still Needed — {{property}}", body: "Hi,\n\nFollowing up on our request for the ISP / telecom agreements at {{property}}. We're copying ownership ({{client}}) so we can close this out — Due Diligence can't be completed without them.\n\nUpload link: [Formstack link]\n\nThank you,\nGreystar Advisory Services" }
+      ], done },
+    { section: "Contract collection", text: "ISP contracts received and uploaded to tracker", responsible: "Advisory Services", panel: ["ispContracts"],
+      guide: "Separate from requesting them. Missing contracts weaken the legal and economic analysis.", done },
+    { section: "Contract collection", text: "Contracts sent to Davis Craig for legal review", responsible: "Advisory Services", toggleWith: "Outside Legal", rounds: 0, panel: ["legal"],
+      guide: "Legal review step after contracts are uploaded.",
+      emailTemplates: [{ label: "Standard", subject: "Contract Review Request — {{property}}", body: "Hi,\n\nAttached are the ISP agreements on file for {{property}} for your review ahead of our Due Diligence findings.\n\nBest,\nGreystar Advisory Services" }], done },
+    { section: "Analysis", text: "Current ISP contracted services reviewed", responsible: "Advisory Services", panel: ["ispSummary"], done },
+    { section: "Analysis", text: "Baseline financial model built (incl. expected income per option)", responsible: "Advisory Services", panel: ["econModel"],
+      guide: "Expected income lives inside the economic model, not as its own step. Upload the model in the panel.", done },
+    { section: "Analysis", text: "Service options evaluated for each property", responsible: "Advisory Services", panel: ["broadband", "dealTerms"], done },
+    { section: "Findings & decision", text: DD_PRESENTED_STEP, responsible: "Advisory Services", emailTemplates: findings, done },
+    { section: "Findings & decision", text: "Client reviewed findings", responsible: "Client", done },
+    { section: "Findings & decision", text: DD_DECISION_STEP, responsible: "Client", derived: true, panel: ["decision"],
+      guide: "Pick the outcome in the dropdown. Replaces 'record outcome in master tracker' and the '100% diligence' FYI.", done }
   ];
 }
+// Load-bearing Due Diligence to-do texts (drive dates / derived state).
+const DD_SCOPE_STEP = "Due diligence scope selected";
+const DD_PRESENTED_STEP = "Findings, service options and economic modeling presented to client";
+const DD_DECISION_STEP = "Client selected next step";
 
 // Canonical Advisory Service Contracting checklist — mirrors the Due
 // Diligence contracting mechanics (NSC drafts, business unit reviews,
@@ -1891,27 +1953,42 @@ function ddTemplate(done) {
 // Negotiation — to pursue next, recorded here rather than as a separate
 // phase of its own.
 function advisoryTemplate(done) {
+  const intakeSend = { label: "Intake form", subject: "Client Intake Form — {{property}}", body: "Hi,\n\nTo define the advisory-services scope for {{property}}, please complete the attached client intake form (or the bulk intake Excel file for multiple properties).\n\nBest,\nGreystar Advisory Services" };
+  const intakeReminder = { label: "2-week reminder", subject: "Reminder: Client Intake Form — {{property}}", body: "Hi,\n\nJust following up on the client intake form for {{property}}. Once it's back we can confirm scope and get the agreement drafted.\n\nThanks,\nGreystar Advisory Services" };
   return [
-    { text: "Client reviews due diligence findings and recommendation", responsible: "Client", done },
-    { text: "Work with client to define which services to proceed with (advisory services)", responsible: "Advisory Services", emailTemplates: [{ label: "Standard", subject: "Next Steps Discussion — {{property}}", body: "Hi,\n\nNow that Due Diligence is complete for {{property}}, we would like to schedule time to discuss which services you would like to proceed with.\n\nBest,\nGreystar Advisory Services" }], done },
-    { text: "NSC drafts advisory services agreement for business unit review", responsible: "NSC", toggleWith: "Advisory Services", rounds: 0, approvalGate: true, emailTemplates: [{ label: "Standard", subject: "Request: NSC Advisory Agreement Drafting — {{property}}", body: "Hi,\n\nRequesting NSC begin drafting the Advisory Services agreement for {{property}}.\n\nBest,\nGreystar Advisory Services" }], done },
-    { text: "Draft agreement sent to client for review", responsible: "Client Services", toggleWith: "Client", rounds: 0, approvalGate: true, emailTemplates: [{ label: "Standard", subject: "Draft Agreement Ready for Your Review — {{property}}", body: "Hi,\n\nThe draft agreement for {{property}} is ready for your review. Please let us know if you have any questions or edits.\n\nBest,\nGreystar Advisory Services" }], done },
-    { text: "NSC finalizes agreement for execution", responsible: "NSC", emailTemplates: [{ label: "Standard", subject: "Please Finalize Agreement for Execution — {{property}}", body: "Hi,\n\nRequesting NSC finalize the agreement for {{property}} so it can move to execution.\n\nBest,\nGreystar Advisory Services" }], done },
-    { text: "Contract out for signatures", responsible: "Client Services", emailTemplates: [
+    { section: "Scoping", text: "Intake form / bulk intake Excel sent to client (if needed)", responsible: "Advisory Services", optional: true, panel: ["intake"],
+      guide: "Skip when an existing PMA already has the information. Checking this starts the 2-week reminder clock.",
+      emailTemplates: [intakeSend], done },
+    { section: "Scoping", text: "Client completed intake form / bulk intake Excel", responsible: "Client", optional: true, panel: ["intake"],
+      guide: "Reminder email is due 2 weeks after the form was sent (see panel). Who owns the automation is still open.",
+      emailTemplates: [intakeReminder], done },
+    { section: "Scoping", text: "Worked with client to define which services to proceed with", responsible: "Advisory Services", panel: ["terms"],
+      emailTemplates: [{ label: "Standard", subject: "Next Steps Discussion — {{property}}", body: "Hi,\n\nWe would like to schedule time to confirm which Advisory Services you would like to proceed with for {{property}}.\n\nBest,\nGreystar Advisory Services" }], done },
+    { section: "Agreement", text: ADVISORY_DRAFT_STEP, responsible: "NSC", panel: ["contractDocs"],
+      guide: "National Contracting drafts.",
+      emailTemplates: [{ label: "Standard", subject: "Request: NSC Advisory Agreement Drafting — {{property}}", body: "Hi,\n\nRequesting NSC begin drafting the Advisory Services agreement for {{property}}.\n\nBest,\nGreystar Advisory Services" }], done },
+    { section: "Agreement", text: "Advisory Services approved business terms", responsible: "Advisory Services", approvalGate: true, panel: ["terms"], done },
+    { section: "Agreement", text: "Draft agreement sent to client for review", responsible: "Client Services",
+      emailTemplates: [{ label: "Standard", subject: "Draft Agreement Ready for Your Review — {{property}}", body: "Hi,\n\nThe draft agreement for {{property}} is ready for your review. Please let us know if you have any questions or edits.\n\nBest,\nGreystar Advisory Services" }], done },
+    { section: "Agreement", text: "Redlines exchanged between client and NSC", responsible: "Client", toggleWith: "NSC", rounds: 0,
+      guide: "Repeatable: press ⇄ each time redlines change hands (client → NSC → client…). R# counts the rounds. Check it once redlines are settled.", done },
+    { section: "Agreement", text: "NSC finalizes agreement for execution", responsible: "NSC",
+      emailTemplates: [{ label: "Standard", subject: "Please Finalize Agreement for Execution — {{property}}", body: "Hi,\n\nRequesting NSC finalize the agreement for {{property}} so it can move to execution.\n\nBest,\nGreystar Advisory Services" }], done },
+    { section: "Agreement", text: "Form sent to Client Services", responsible: "Advisory Services",
+      guide: "Open: which form, the hand-off process, and who owns it.", done },
+    { section: "Agreement", text: "Contract out for signatures", responsible: "Client Services", emailTemplates: [
       { label: "Standard", subject: "Signature Requested — {{property}} Agreement", body: "Hi,\n\nThe agreement for {{property}} is ready for signature. Please let us know if you have any questions.\n\nThank you for your partnership.\n\nBest,\nGreystar Advisory Services" },
       { label: "Follow-up / reminder", subject: "Following Up — Signature Needed for {{property}}", body: "Hi,\n\nJust following up on the agreement for {{property}}, still pending signature. Let us know if anything is holding it up on your end.\n\nThanks,\nGreystar Advisory Services" }
     ], done },
-    { text: "Advisory Services contract executed", responsible: "Client", emailTemplates: [{ label: "Standard", subject: "Confirmation: Advisory Agreement Executed — {{property}}", body: "Hi,\n\nConfirming the Advisory Services agreement for {{property}} has been executed.\n\nBest,\nGreystar Advisory Services" }], done },
-    { text: "Record track selection in master tracker: RFP track, incumbent negotiation track, or both", responsible: "ROVR", done },
-    // Internal close-out step, separate from the client-facing signature
-    // above. Left unchecked, this holds the phase open — RFP/Incumbent
-    // Negotiation/Program Design/Deployment won't start rendering yet
-    // even if the client has already verbally chosen them — and lets it
-    // read as At Risk once Advisory has run past its own expected
-    // timeframe.
-    { text: "Advisory Services selected in tracker", responsible: "ROVR", done }
+    { section: "Agreement", text: "Advisory Services contract executed", responsible: "Client", panel: ["terms"], emailTemplates: [{ label: "Standard", subject: "Confirmation: Advisory Agreement Executed — {{property}}", body: "Hi,\n\nConfirming the Advisory Services agreement for {{property}} has been executed.\n\nBest,\nGreystar Advisory Services" }], done },
+    { section: "Agreement", text: ADVISORY_UPLOAD_STEP, responsible: "Advisory Services", panel: ["contractDocs"],
+      guide: "The one manual tracker task: Ironclad import + attach the PDF. Scope, dates and fees then fill in automatically.", done },
+    // Internal close-out step: derived from Contracted Options. Left
+    // unchecked, this holds the phase open.
+    { section: "Agreement", text: "Advisory Services selected in tracker", responsible: "ROVR", derived: true, done }
   ];
 }
+const ADVISORY_UPLOAD_STEP = "Advisory contract uploaded via Ironclad import, contract PDF attached";
 
 // Text of the final internal Advisory to-do — checking downstream phase
 // generation against this, not the phase's stored done flag, so live
@@ -1932,7 +2009,7 @@ const ADVISORY_DRAFT_STEP = "NSC drafts advisory services agreement for business
 // contract-executed date) — worth visually distinguishing from the rest
 // of a long checklist, since these are the genuine pivotal moments.
 const KEY_MILESTONE_TODOS = {
-  dueDiligence: "Advisory Services contract executed",
+  dueDiligence: "Client selected next step",
   advisory: "Advisory Services contract executed",
   contractingLegal: "Final ISP agreement executed"
 };
@@ -3894,7 +3971,13 @@ function phaseFilterLabel(filter) {
 function PropertiesView({ properties: allRows, onOpenProperty, callNotes, search, setSearch, portfolios, clientNotes, onSaveOwner, supabaseClient, showClosed, onToggleClosed, closedCount, phaseFilter, setPhaseFilter }) {
   const stageOf = useMemo(() => { const m = new Map(); allRows.forEach((p) => m.set(p.id, currentPhaseGroupLabel(p))); return m; }, [allRows]);
   const stageCounts = useMemo(() => { const c = {}; stageOf.forEach((s) => { c[s] = (c[s] || 0) + 1; }); return c; }, [stageOf]);
-  const properties = useMemo(() => phaseFilter ? allRows.filter((p) => matchesPhaseFilter(stageOf.get(p.id), phaseFilter)) : allRows, [allRows, stageOf, phaseFilter]);
+  // Discovery flags (checklist v2): additional client needs outside advisory scope.
+  const [needFilter, setNeedFilter] = useState(null);
+  const needCounts = useMemo(() => ({ projectOversight: allRows.filter((p) => p.program.flags && p.program.flags.projectOversight).length, buildingTech: allRows.filter((p) => p.program.flags && p.program.flags.buildingTech).length }), [allRows]);
+  const properties = useMemo(() => {
+    const byPhase = phaseFilter ? allRows.filter((p) => matchesPhaseFilter(stageOf.get(p.id), phaseFilter)) : allRows;
+    return needFilter ? byPhase.filter((p) => p.program.flags && p.program.flags[needFilter]) : byPhase;
+  }, [allRows, stageOf, phaseFilter, needFilter]);
   const [mode, setModeState] = useState(() => { try { return localStorage.getItem("clientPageMode") || "owner"; } catch (e) { return "owner"; } });
   const setMode = (m) => { setModeState(m); try { localStorage.setItem("clientPageMode", m); } catch (e) {} };
   const [expanded, setExpanded] = useState(() => new Set());
@@ -3908,7 +3991,7 @@ function PropertiesView({ properties: allRows, onOpenProperty, callNotes, search
   const toggle = (key) => setExpanded((s) => { const n = new Set(s); n.has(key) ? n.delete(key) : n.add(key); return n; });
   const allOpen = shownGroups.length > 0 && shownGroups.every((g) => expanded.has(g.key));
   // Owners and the properties under them, limited to the phase filter.
-  const filteredItems = (g) => phaseFilter ? g.items.filter(({ p }) => matchesPhaseFilter(stageOf.get(p.id), phaseFilter)) : g.items;
+  const filteredItems = (g) => g.items.filter(({ p }) => (!phaseFilter || matchesPhaseFilter(stageOf.get(p.id), phaseFilter)) && (!needFilter || (p.program.flags && p.program.flags[needFilter])));
 
   const propCells = (p) => {
     const phaseLabel = currentPhaseGroupLabel(p);
@@ -3950,6 +4033,9 @@ function PropertiesView({ properties: allRows, onOpenProperty, callNotes, search
             <button className={mode === "property" ? "on" : ""} onClick={() => setMode("property")} role="tab" aria-selected={mode === "property"}>Property</button>
           </div>
           <button className={`pf-chip${!phaseFilter ? " on" : ""}`} onClick={() => setPhaseFilter && setPhaseFilter(null)} title="Clear the phase filter">All phases <b>{allRows.length}</b></button>
+          {[["projectOversight", "Project-oversight need"], ["buildingTech", "Building-tech need"]].map(([k, label]) => (
+            <button key={k} className={`pf-chip${needFilter === k ? " on" : ""}${needCounts[k] ? "" : " zero"}`} onClick={() => setNeedFilter(needFilter === k ? null : k)} title="Flagged during Discovery as a need outside the advisory-services scope">⚑ {label} <b>{needCounts[k]}</b></button>
+          ))}
           <input type="text" placeholder={mode === "owner" ? "Search owners or properties" : "Search properties"} value={search} onChange={(e) => setSearch(e.target.value)} style={{ minWidth: 260 }} aria-label="Search" />
           {mode === "owner" && shownGroups.length > 0 && (
             <button className="link" onClick={() => setExpanded(allOpen ? new Set() : new Set(shownGroups.map((g) => g.key)))}>{allOpen ? "Collapse all" : "Expand all"}</button>
@@ -4004,9 +4090,9 @@ function PropertiesView({ properties: allRows, onOpenProperty, callNotes, search
               <tbody>
                 {shownGroups.length === 0 ? (
                   <tr><td colSpan={7} style={{ color: "var(--mut)" }}>No owners match.</td></tr>
-                ) : shownGroups.filter((g) => !phaseFilter || filteredItems(g).length).map((g) => {
+                ) : shownGroups.filter((g) => !(phaseFilter || needFilter) || filteredItems(g).length).map((g) => {
                   const s = ownerSummary(g);
-                  const isOpen = expanded.has(g.key) || (q && !g.name.toLowerCase().includes(q)) || !!phaseFilter;
+                  const isOpen = expanded.has(g.key) || (q && !g.name.toLowerCase().includes(q)) || !!phaseFilter || !!needFilter;
                   const base = filteredItems(g);
                   const items = q && !g.name.toLowerCase().includes(q) ? base.filter(({ p }) => `${p.code} ${p.name}`.toLowerCase().includes(q)) : base;
                   const clientN = g.items.filter((i) => i.role === "Client").length;
@@ -4868,7 +4954,7 @@ function BroadbandModal({ property, supabaseClient, onClose }) {
   );
 }
 
-function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSetDecision, onSetPriority, onUpdateAttribute, onUpdateNotes, onUpdateNotesLog, onSetDDDate, onToggleDueDiligence, onToggleServiceOption, onSetServiceContractDate, onSetISPDate, onSetExpectedTCO, onSetDeploymentLiveDate, onSetBillingMilestone, ispCount, consultCount, ispProgram, onOpenIspContracts, ispList, onSetTrackedProvider, rfpProposals, rfpDocs, onOpenRfp, onViewRfp, regionsList, onAddRegion, currentUserEmail, supabaseClient }) {
+function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSetDecision, onSetNextStep, onSetPriority, onUpdateAttribute, onUpdateNotes, onUpdateNotesLog, onSetDDDate, onToggleDueDiligence, onToggleServiceOption, onSetServiceContractDate, onSetISPDate, onSetExpectedTCO, onSetDeploymentLiveDate, onSetBillingMilestone, ispCount, consultCount, ispProgram, onOpenIspContracts, ispList, onSetTrackedProvider, rfpProposals, rfpDocs, onOpenRfp, onViewRfp, regionsList, onAddRegion, currentUserEmail, supabaseClient }) {
   const [notesOpen, setNotesOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [broadbandOpen, setBroadbandOpen] = useState(false);
@@ -5315,13 +5401,10 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
               );
             })()}
 
-            {isHoldingPattern && (
+            {(isHoldingPattern || (program.selectedOptions && program.selectedOptions.dueDiligence) || nextStepOf(program)) && onSetNextStep && (
               <>
-                <div className="field-label" style={{ marginTop: 18 }}>Post-Due-Diligence decision</div>
-                <div className="chip-row">
-                  <button className={`chip ${program.decision !== "closed" ? "chip-active" : ""}`} onClick={() => onSetDecision(null)}>Holding — re-engage later</button>
-                  <button className={`chip ${program.decision === "closed" ? "chip-active" : ""}`} onClick={() => onSetDecision("closed")}>Closed — client declined</button>
-                </div>
+                <div className="field-label" style={{ marginTop: 18 }}>Next step after Due Diligence</div>
+                <div style={{ maxWidth: 420 }}><NextStepSelect program={program} onSetNextStep={onSetNextStep} compact /></div>
               </>
             )}
           </>
@@ -5503,6 +5586,525 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
 }
 
 /* ---------------------------------------------------------
+   CHECKLIST V2 — next-step decision, derived to-dos, migration,
+   and the two-column checklist data panel (11-23 workflow meeting)
+--------------------------------------------------------- */
+// "Client selected next step" — the last Due Diligence to-do. Saved to
+// program.decision. Each option's guide is a TEMPORARY meeting note.
+const NEXT_STEP_OPTIONS = [
+  { value: "rfp", label: "Run RFP", guide: "RFP is covered under the Due Diligence contract, so no amendment is needed. The RFP track opens next." },
+  { value: "amendment", label: "Advisory amendment", guide: "Client skips the RFP and goes straight to deployment (or whatever else they select us for). Moves to Advisory Amendment to contract it." },
+  { value: "track", label: "Track property", guide: "Not interested or not eligible yet (\"purgatory\"). Stays open with no active phase. Wording TBD with Scott." },
+  { value: "trackContract", label: "Track existing contract for expiration", guide: "Revisit before the ISP term ends. Review point is 9 months out for now; 12 months is under discussion." },
+  { value: "closed", label: "Close", guide: "No further discussion. Closes the property and asks for a reason." },
+];
+const NEXT_STEP_VALUES = NEXT_STEP_OPTIONS.map((o) => o.value);
+const nextStepOf = (program) => NEXT_STEP_OPTIONS.find((o) => o.value === (program && program.decision)) || null;
+const DEFAULT_CONTRACT_REVIEW_MONTHS = 9;
+
+// Derived to-dos (set from tracker data, never clicked). Advisory's two
+// derived steps are applied in buildPhases; these are Due Diligence's.
+function effectiveTodosFor(program, storageKey, todos) {
+  const list = todos || [];
+  if (storageKey === "dueDiligence") {
+    const scope = !!contractedOptionsOf(program).dueDiligence;
+    const decided = NEXT_STEP_VALUES.includes(program.decision);
+    return list.map((t) => t.text === DD_SCOPE_STEP ? { ...t, done: scope, derived: true }
+      : t.text === DD_DECISION_STEP ? { ...t, done: decided, derived: true } : t);
+  }
+  return list;
+}
+const todosAllDone = (list) => list.length > 0 && list.every((t) => t.done);
+const isDerivedTodo = (t) => !!t.derived || t.text === ADVISORY_TRACKER_STEP || t.text === ADVISORY_DRAFT_STEP || t.text === DD_SCOPE_STEP || t.text === DD_DECISION_STEP;
+
+// One-time move of saved checklists onto the v2 templates. Old wording
+// maps onto its new item (done state, notes, owner and rounds carried);
+// retired items (null) drop; anything someone added by hand is kept at the
+// end. New items are pre-checked when the work they describe is already
+// behind the property. A full backup of every property was saved to
+// app_state key properties_backup_2026-11-24_before_checklist_v2.
+const CHECKLIST_V2_MAP = {
+  prospecting: {
+    "Identify property as a prospect": null,
+    "Schedule discovery call": "Discovery call scheduled and held",
+    "Gauge interest in a Due Diligence engagement": "Discovery call scheduled and held",
+    "Tracker input — if no further discussion, enter owner and property details and mark the opportunity closed": null,
+    "Tracker input — if client wants to proceed, enter owner and property details in master tracker, send client intake form to client, request ISP contracts for each property": "Client and property details reviewed and verified in tracker",
+  },
+  advisory: {
+    "Client reviews due diligence findings and recommendation": null,
+    "Work with client to define which services to proceed with (advisory services)": "Worked with client to define which services to proceed with",
+    "Record track selection in master tracker: RFP track, incumbent negotiation track, or both": null,
+  },
+  dueDiligence: {
+    "Gather all necessary property information for Due Diligence agreement contracting": null,
+    "NSC drafts agreement for business unit review": null,
+    "Draft agreement sent to client for review": null,
+    "NSC finalizes agreement for execution": null,
+    "Contract out for signatures": null,
+    "Advisory Services contract executed": null,
+    "Begin property & contract due diligence": null,
+    "Obtain necessary property contracts and relevant agreements. Engage outside counsel to see if they have the incumbent contracts on file": "ISP contracts requested for each property",
+    "Enter contracts into master tracker, add property notes, update program status, track down missing contracts with property": "ISP contracts received and uploaded to tracker",
+    "Engage with outside counsel for high level review of existing agreements and intro/discussion with client for assistance with new ISP contract": "Contracts sent to Davis Craig for legal review",
+    "Generate client export from master tracker and financial modeling spreadsheet (baseline model)": "Baseline financial model built (incl. expected income per option)",
+    "Review agreements": "Current ISP contracted services reviewed",
+    "Create recommendation": "Service options evaluated for each property",
+    "Present findings to client": DD_PRESENTED_STEP,
+  },
+};
+function migrateChecklistV2(program) {
+  if (!program || (program.checklistVersion || 1) >= CHECKLIST_VERSION) return program;
+  const pd = { ...(program.phaseData || {}) };
+  const hasAdvisory = !!(program.advisoryContractExecuted || program.advisoryContractDrafted || program.advisoryContractingStart);
+  Object.keys(CHECKLIST_V2_MAP).forEach((key) => {
+    const stored = pd[key];
+    if (!stored || !Array.isArray(stored.todos)) return;
+    const tpl = defaultTodosFor(key, false);
+    const tplTexts = new Set(tpl.map((t) => t.text));
+    const map = CHECKLIST_V2_MAP[key];
+    const carried = {}; const extras = [];
+    stored.todos.forEach((t) => {
+      if (!t || !t.text) return;
+      const target = tplTexts.has(t.text) ? t.text : Object.prototype.hasOwnProperty.call(map, t.text) ? map[t.text] : undefined;
+      if (target === null) return;
+      if (target === undefined) { extras.push({ ...t, section: t.section || "Added by hand" }); return; }
+      const prev = carried[target];
+      carried[target] = prev ? { ...prev, done: !!(prev.done || t.done), notes: [prev.notes, t.notes].filter(Boolean).join("\n") || undefined } : t;
+    });
+    const behind = key === "prospecting" ? hasAdvisory : key === "advisory" ? !!program.advisoryContractExecuted : !!stored.done;
+    const todos = tpl.map((t) => {
+      const c = carried[t.text];
+      if (!c) return { ...t, done: behind && !t.derived };
+      const out = { ...t, done: !!c.done };
+      ["notes", "due", "blocked", "doneDate", "skipped"].forEach((f) => { if (c[f] != null && c[f] !== "") out[f] = c[f]; });
+      if (c.responsible) out.responsible = c.responsible;
+      if (t.toggleWith && c.toggleWith) { out.toggleWith = c.toggleWith; out.rounds = c.rounds || 0; }
+      return out;
+    });
+    pd[key] = { ...stored, todos: [...todos, ...extras] };
+  });
+  return { ...program, phaseData: pd, checklistVersion: CHECKLIST_VERSION };
+}
+
+// Which right-hand panels a phase shows: every panel its to-dos ask for,
+// then the phase's own defaults.
+const PHASE_DEFAULT_PANELS = {
+  prospecting: ["property", "contacts", "callNotes"], advisory: ["terms", "contractDocs"], dueDiligence: ["ispContracts", "ispSummary", "decision"],
+  rfp: ["rfpDocs", "rfpProposals"], incumbentNegotiation: ["ispSummary", "rfpProposals"], programDesign: ["contacts", "sitePlans"],
+  contractingLegal: ["legal"], deployment: ["contacts", "sitePlans"], postDeploymentValidation: ["broadband"], ongoing: ["ispSummary", "contacts"],
+  planning: ["terms", "contractDocs", "callNotes"], planningGapLive: ["terms", "contractDocs", "callNotes"],
+};
+const PANEL_TITLES = {
+  property: "Property record", contacts: "Property contacts", callNotes: "Recent call notes", intake: "Client intake",
+  discoveryFlags: "Additional client needs", terms: "Contracted services & fees", contractDocs: "Advisory contract",
+  billing: "Billing milestones", ispRequest: "ISP contract request", ispContracts: "ISP contracts on file",
+  ispSummary: "ISP contract summary", legal: "Legal review", econModel: "Economic model", broadband: "Broadband (FCC)",
+  dealTerms: "Deal terms & wiring", decision: "Next step", rfpDocs: "RFP documents", rfpProposals: "Provider proposals", sitePlans: "Site plans",
+};
+function panelsForPhase(phaseKey, todos) {
+  const out = [];
+  (todos || []).forEach((t) => (t.panel || []).forEach((k) => { if (!out.includes(k)) out.push(k); }));
+  (PHASE_DEFAULT_PANELS[phaseKey] || []).forEach((k) => { if (!out.includes(k)) out.push(k); });
+  return out;
+}
+
+// Where a property-record value comes from. Master-paired properties lock
+// master fields (the nightly master sync would overwrite an edit there).
+function attrSource(program, key) {
+  const a = program.attributes || {};
+  if (CL_MASTER_FIELDS.some(([k]) => k === key) && a["Source of Record"] === "Master") return "master";
+  if (key === "Contract Units") return "contract";
+  return "manual";
+}
+const SRC_TAG = {
+  master: { txt: "master", title: "Greystar master data, refreshed nightly. Locked here: flag a wrong value in the Change Log.", bg: "#2b4f66", fg: "#d4ecfa" },
+  contract: { txt: "contract", title: "From the executed contract", bg: "#1f5a34", fg: "#b8efc7" },
+  extracted: { txt: "extracted", title: "Read from the document by Claude; not yet checked by a person", bg: "#5a4a1a", fg: "#ffd98a" },
+  verified: { txt: "verified", title: "Checked by a person", bg: "#1f5a34", fg: "#b8efc7" },
+  manual: { txt: "manual", title: "Entered in the tracker", bg: "#3a4a6e", fg: "#d6e0f3" },
+  fcc: { txt: "FCC", title: "FCC National Broadband Map, imported weekly", bg: "#3d3670", fg: "#d3cdfa" },
+  server: { txt: "server", title: "Written by Claude server-side", bg: "#3a4a6e", fg: "#d6e0f3" },
+};
+function SrcTag({ src }) {
+  const s = SRC_TAG[src]; if (!s) return null;
+  return <span title={s.title} style={{ fontSize: 9.5, padding: "1px 5px", borderRadius: 4, background: s.bg, color: s.fg, textTransform: "uppercase", letterSpacing: 0.4, marginLeft: 6, whiteSpace: "nowrap" }}>{s.txt}</span>;
+}
+
+// Click-to-edit value. Saves on blur / Enter; Esc cancels.
+function EditableValue({ value, type, locked, onSave, placeholder, options }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const show = value == null || value === "" ? <span className="dim">{placeholder || "—"}</span>
+    : type === "bool" ? (value ? "Yes" : "No")
+    : Array.isArray(value) ? value.join("; ") : String(value);
+  if (locked || !onSave) return <span className="cl2-val">{show}</span>;
+  if (!editing) return <button className="cl2-val cl2-editable" title="Click to edit" onClick={() => { setDraft(value == null ? "" : type === "bool" ? (value ? "true" : "false") : Array.isArray(value) ? value.join("; ") : String(value)); setEditing(true); }}>{show}</button>;
+  const commit = () => {
+    setEditing(false);
+    let v = draft.trim();
+    let out = v === "" ? null : v;
+    if (type === "number" && out != null) { const n = Number(out.replace(/[$,%]/g, "")); out = Number.isFinite(n) ? n : null; }
+    if (type === "bool") out = draft === "" ? null : draft === "true";
+    if (type === "list") out = v ? v.split(/;\s*/).map((x) => x.trim()).filter(Boolean) : null;
+    const before = value == null ? null : Array.isArray(value) ? value.join("; ") : value;
+    const after = out == null ? null : Array.isArray(out) ? out.join("; ") : out;
+    if (String(before) !== String(after)) onSave(out);
+  };
+  const onKey = (e) => { if (e.key === "Enter" && type !== "text-long") commit(); if (e.key === "Escape") setEditing(false); };
+  if (type === "bool" || options) {
+    return (
+      <select autoFocus className="cl2-input" value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={commit}>
+        <option value="">—</option>
+        {type === "bool" ? <><option value="true">Yes</option><option value="false">No</option></> : options.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    );
+  }
+  if (type === "text-long") return <textarea autoFocus className="cl2-input" rows={3} value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={commit} onKeyDown={onKey} />;
+  return <input autoFocus className="cl2-input" type={type === "date" ? "date" : "text"} value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={commit} onKeyDown={onKey} />;
+}
+function Cl2Row({ label, children, src }) {
+  return (
+    <div className="cl2-row">
+      <span className="cl2-key">{label}<SrcTag src={src} /></span>
+      <span style={{ minWidth: 0, textAlign: "right" }}>{children}</span>
+    </div>
+  );
+}
+
+// The dropdown itself. Shared by the Due Diligence panel and the
+// property record.
+function NextStepSelect({ program, onSetNextStep, guidance, compact }) {
+  const cur = nextStepOf(program);
+  const [reason, setReason] = useState(program.closedReason || "");
+  useEffect(() => { setReason(program.closedReason || ""); }, [program.closedReason]);
+  const choose = (v) => {
+    if (v === "closed") { onSetNextStep("closed", { closedReason: reason || null }); return; }
+    onSetNextStep(v || null, {});
+  };
+  return (
+    <div>
+      <select className="cl2-input" style={{ width: "100%", fontSize: 13 }} value={cur ? cur.value : ""} onChange={(e) => choose(e.target.value)}>
+        <option value="">Choose the client's next step…</option>
+        {NEXT_STEP_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+      {cur && program.decisionDate && <div className="dim" style={{ fontSize: 11, marginTop: 4 }}>Selected {fmtDate(program.decisionDate)}{program.decisionBy ? ` by ${clFirstName(program.decisionBy)}` : ""}</div>}
+      {guidance && !compact && (
+        <ul className="cl2-guide" style={{ margin: "8px 0 0", paddingLeft: 16 }}>
+          {NEXT_STEP_OPTIONS.map((o) => <li key={o.value} style={{ opacity: cur && cur.value !== o.value ? 0.55 : 1 }}><b>{o.label}:</b> {o.guide}</li>)}
+        </ul>
+      )}
+      {cur && cur.value === "closed" && (
+        <div style={{ marginTop: 8 }}>
+          <div className="field-label">Reason for closing</div>
+          <input className="cl2-input" style={{ width: "100%" }} placeholder="e.g. client declined after findings" value={reason}
+            onChange={(e) => setReason(e.target.value)} onBlur={() => reason !== (program.closedReason || "") && onSetNextStep("closed", { closedReason: reason || null })} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function openStoragePath(supabaseClient, path, link) {
+  if (link) { window.open(link, "_blank", "noopener"); return; }
+  if (!supabaseClient || !path) return;
+  const win = window.open("", "_blank");
+  supabaseClient.storage.from(ISP_BUCKET).createSignedUrl(path, 300).then(({ data, error }) => {
+    if (error || !data || !data.signedUrl) { if (win) win.close(); window.alert(`Couldn't open the file: ${error ? error.message : "no link returned"}`); return; }
+    if (win) win.location.href = data.signedUrl; else window.open(data.signedUrl, "_blank", "noopener");
+  });
+}
+
+const ISP_SUMMARY_FIELDS = [
+  ["provider", "Provider", "text"], ["agreement_type", "Agreement type", "text"], ["program_type", "Program", "select"],
+  ["executed_date", "Executed", "date"], ["expiration_date", "Expires", "date"], ["term_text", "Term", "text"],
+  ["units", "Units", "number"], ["bulk_rate", "Bulk rate", "text"], ["door_fee_amount", "Door fee ($)", "number"],
+  ["rev_share", "Rev share", "text"], ["escalator_pct", "Escalator (%)", "number"], ["exclusive", "Exclusive", "bool"],
+  ["anti_bulk", "Anti-bulk", "bool"], ["services", "Services", "list"], ["red_flags", "Red flags", "list"],
+];
+const LEGAL_FIELDS = [["termination_terms", "Termination", "text-long"], ["renewal_terms", "Renewal", "text-long"], ["exclusivity_detail", "Exclusivity", "text-long"]];
+const COUNSEL_STATUSES = ["Not sent", "Sent to counsel", "In review", "Review complete"];
+const fmtMoneyMaybe = (n) => n == null || n === "" ? null : (typeof FMT_MONEY === "function" ? FMT_MONEY(Number(n)) : `$${Number(n).toLocaleString()}`);
+
+function ChecklistDataPanel({ panelKey, property, todos, ispList, rfpProposals, rfpDocs, callNotes, supabaseClient, userEmail, guidance, onPatchProgram, onUpdateAttribute, onSetNextStep, onIspChanged, onLog, onOpenIspContracts, onOpenRfp }) {
+  const program = property.program;
+  const a = program.attributes || {};
+  const isp = (ispList || []).filter((c) => c.doc_kind !== "consulting");
+  const attrRow = (k) => {
+    const src = attrSource(program, k);
+    return (
+      <Cl2Row key={k} label={k} src={src}>
+        <EditableValue value={a[k]} locked={src === "master"} onSave={(v) => { onLog(k, a[k], v); onUpdateAttribute(k, v == null ? "" : v); }} />
+      </Cl2Row>
+    );
+  };
+  const saveIsp = async (c, field, v) => {
+    const patch = { [field]: v, verified: true };
+    const { error } = await supabaseClient.from("isp_contracts").update(patch).eq("id", c.id);
+    if (error) { window.alert(`Couldn't save: ${error.message}`); return; }
+    onLog(`ISP ${c.provider || c.file_name}: ${field}`, c[field], v, "ISP contract");
+    onIspChanged && onIspChanged();
+  };
+  const todoDone = (text) => (todos || []).find((t) => t.text === text);
+
+  switch (panelKey) {
+    case "property":
+      return <div>{["Client", "JV Partner", "Yardi Code", "Master Status", "Address", "City", "State", "Units", "Contract Units", "Project Type", "PMA Status", "Previous Names"].map(attrRow)}
+        <Cl2Row label="Source of record"><span className="cl2-val">{a["Source of Record"] || "—"}</span></Cl2Row></div>;
+    case "contacts":
+      return <div>{["RPM", "RPM Email", "CM", "CM Email", "Office", "Region"].map(attrRow)}</div>;
+    case "callNotes": {
+      const rows = (callNotes || []).filter((r) => r.property_code === property.code).slice(0, 3);
+      if (!rows.length) return <div className="dim cl2-empty">No call-digest entries for this property yet.</div>;
+      return <div>{rows.map((r) => (
+        <div key={r.id} style={{ marginBottom: 8 }}>
+          <div className="dim mono" style={{ fontSize: 10.5 }}>{fmtDate(String(r.digest_date).slice(0, 10))}{r.phase ? ` · ${r.phase}` : ""}</div>
+          <div style={{ fontSize: 12.5, whiteSpace: "pre-wrap" }}>{r.summary}</div>
+          {r.todo && <div className="dim" style={{ fontSize: 11.5 }}>To-do: {r.todo}</div>}
+        </div>))}
+        <div className="dim" style={{ fontSize: 10.5 }}>Read-only: written by the call digest.</div></div>;
+    }
+    case "intake": {
+      const sent = todoDone("Intake form / bulk intake Excel sent to client (if needed)") || todoDone("Intake form and services one-pager sent (prospects without a PMA)");
+      const sentDate = sent && sent.done ? sent.doneDate : null;
+      const received = todoDone("Client completed intake form / bulk intake Excel");
+      const due = sentDate ? addDays(sentDate, 14) : null;
+      const overdue = due && !(received && received.done) && due <= TODAY;
+      return (
+        <div>
+          {attrRow("PMA Status")}
+          {guidance && <div className="cl2-guide">PMA on file → intake form usually not needed.</div>}
+          <Cl2Row label="Form sent">{sentDate ? fmtDate(sentDate) : <span className="dim">Not yet</span>}</Cl2Row>
+          <Cl2Row label="Reminder due">{due ? <span style={overdue ? { color: "#ffd98a" } : undefined}>{fmtDate(due)}{overdue ? " · send reminder" : ""}</span> : <span className="dim">—</span>}</Cl2Row>
+          <Cl2Row label="Form received">{received && received.done ? (received.doneDate ? fmtDate(received.doneDate) : "Yes") : <span className="dim">Not yet</span>}</Cl2Row>
+          <DocShelfSection cfg={DOC_SHELVES.intake} property={property} supabaseClient={supabaseClient} userEmail={userEmail} />
+        </div>
+      );
+    }
+    case "discoveryFlags": {
+      const f = program.flags || {};
+      const set = (k, v) => { onLog(k === "projectOversight" ? "Flag: additional project oversight" : "Flag: additional building technology", f[k] ? "Yes" : "No", v ? "Yes" : "No"); onPatchProgram((pp) => ({ ...pp, flags: { ...(pp.flags || {}), [k]: v } })); };
+      return (
+        <div>
+          <label className="cl2-check"><input type="checkbox" checked={!!f.projectOversight} onChange={(e) => set("projectOversight", e.target.checked)} /> Additional project-oversight need</label>
+          <label className="cl2-check"><input type="checkbox" checked={!!f.buildingTech} onChange={(e) => set("buildingTech", e.target.checked)} /> Additional building-technology need</label>
+          <div className="dim" style={{ fontSize: 10.5, marginTop: 4 }}>Saved on the property record; filter for them on the Properties page.</div>
+        </div>
+      );
+    }
+    case "terms": {
+      const opts = program.selectedOptions || {};
+      const fees = program.confirmedFees || {};
+      const svc = [["dueDiligence", "Due Diligence"], ["rfp", "RFP"], ["incumbentNegotiation", "Incumbent Negotiation"], ["programDesign", "Program Design"], ["deployment", "Deployment + Ongoing"]];
+      return (
+        <div>
+          {svc.map(([k, label]) => {
+            const exec = serviceExecutedDate(program, k);
+            const proposed = !!opts[k];
+            if (!proposed && !exec) return null;
+            return <Cl2Row key={k} label={label} src="contract"><span className="cl2-val">{exec ? `Executed ${fmtDate(exec)}` : "In draft"}{fees[k] != null ? ` · ${fmtMoneyMaybe(fees[k])}` : ""}</span></Cl2Row>;
+          })}
+          {!svc.some(([k]) => opts[k]) && <div className="dim cl2-empty">No services on a contract yet.</div>}
+          {attrRow("Contract Units")}
+          {guidance && <div className="cl2-guide">Services and fees come from the Ironclad import; the contract always guides billing. Contract Units is never overwritten by master data.</div>}
+        </div>
+      );
+    }
+    case "contractDocs":
+      return (
+        <div>
+          <Cl2Row label="Drafted" src="contract">{program.advisoryContractDrafted ? fmtDate(program.advisoryContractDrafted) : <span className="dim">Not yet</span>}</Cl2Row>
+          <Cl2Row label="Executed" src="contract">{program.advisoryContractExecuted ? fmtDate(program.advisoryContractExecuted) : <span className="dim">Not yet</span>}</Cl2Row>
+          <Cl2Row label="Contract PDF">{program.contractLink || program.contractPath
+            ? <button className="cl2-link" onClick={() => openStoragePath(supabaseClient, program.contractPath, program.contractLink)}>Open contract ↗</button>
+            : <span className="dim">Not attached — use Ironclad import</span>}</Cl2Row>
+        </div>
+      );
+    case "billing":
+      return <div>{!program.advisoryContractExecuted ? <div className="dim cl2-empty">Starts once the advisory contract is executed.</div>
+        : BILLING_MILESTONES.map((def) => { const st = billingMilestoneState(program, def); if (!st.contracted) return null;
+          return <Cl2Row key={def.key} label={def.label}>{st.done ? `✓ ${st.date ? fmtDate(st.date) : ""}` : <span className="dim">Not yet</span>}</Cl2Row>; })}
+        <div className="dim" style={{ fontSize: 10.5, marginTop: 4 }}>DD fee is invoiced by the billing automation. Check milestones on the property record.</div></div>;
+    case "ispRequest": {
+      const req = todoDone("ISP contracts requested for each property");
+      return (
+        <div>
+          <Cl2Row label="Requested">{req && req.done ? (req.doneDate ? fmtDate(req.doneDate) : "Yes") : <span className="dim">Not yet</span>}</Cl2Row>
+          <Cl2Row label="Contracts on file">{isp.length}</Cl2Row>
+          {req && req.done && !isp.length && <div className="cl2-guide" style={{ color: "#ffd98a" }}>Nothing on file yet: send the escalation template (copies the client).</div>}
+          {guidance && <div className="cl2-guide">Open: when to escalate, who watches Formstack submissions.</div>}
+        </div>
+      );
+    }
+    case "ispContracts":
+      return (
+        <div>
+          {isp.length === 0 ? <div className="dim cl2-empty">No ISP contracts on file.</div> : isp.map((c) => (
+            <div key={c.id} className="cl2-row">
+              <span className="cl2-key" style={{ textTransform: "none", whiteSpace: "normal", minWidth: 0 }}>{c.provider || c.file_name}{c.agreement_type ? ` · ${c.agreement_type}` : ""}<SrcTag src={c.verified ? "verified" : "extracted"} /></span>
+              <span style={{ display: "flex", gap: 8, flexShrink: 0 }}>{c.expiration_date && <span className="mono" style={{ fontSize: 11, whiteSpace: "nowrap" }}>exp {fmtDate(String(c.expiration_date).slice(0, 10))}</span>}
+                {c.file_path && <button className="cl2-link" onClick={() => ispOpenPdf(supabaseClient, c).catch((e) => window.alert(e.message))}>PDF ↗</button>}</span>
+            </div>))}
+          <button className="btn-ghost" style={{ marginTop: 6 }} onClick={onOpenIspContracts}>Open ISP repository</button>
+        </div>
+      );
+    case "ispSummary":
+      return (
+        <div>
+          {isp.length === 0 ? <div className="dim cl2-empty">No ISP contracts on file to summarize.</div> : isp.map((c) => (
+            <details key={c.id} className="cl2-details" open={isp.length === 1}>
+              <summary>{c.provider || c.file_name}{c.program_type ? ` · ${c.program_type}` : ""}{c.expiration_date ? ` · exp ${fmtDate(String(c.expiration_date).slice(0, 10))}` : ""}<SrcTag src={c.verified ? "verified" : "extracted"} /></summary>
+              {ISP_SUMMARY_FIELDS.map(([f, label, type]) => (
+                <Cl2Row key={f} label={label}>
+                  <EditableValue value={type === "date" && c[f] ? String(c[f]).slice(0, 10) : c[f]} type={type === "select" ? "text" : type} options={type === "select" ? ISP_PROGRAMS : undefined}
+                    onSave={(v) => saveIsp(c, f, v)} />
+                </Cl2Row>
+              ))}
+              {c.file_path && <button className="cl2-link" style={{ marginTop: 4 }} onClick={() => ispOpenPdf(supabaseClient, c).catch((e) => window.alert(e.message))}>Check against the PDF ↗</button>}
+            </details>))}
+          {guidance && isp.length > 0 && <div className="cl2-guide">Click a value to correct it. Saving marks the contract verified.</div>}
+        </div>
+      );
+    case "legal":
+      return (
+        <div>
+          <Cl2Row label="Counsel status"><EditableValue value={program.counselStatus || null} options={COUNSEL_STATUSES} placeholder="Not sent"
+            onSave={(v) => { onLog("Counsel status", program.counselStatus, v); onPatchProgram((pp) => ({ ...pp, counselStatus: v })); }} /></Cl2Row>
+          {isp.map((c) => (
+            <details key={c.id} className="cl2-details">
+              <summary>{c.provider || c.file_name}<SrcTag src={c.verified ? "verified" : "extracted"} /></summary>
+              {LEGAL_FIELDS.map(([f, label, type]) => <Cl2Row key={f} label={label}><EditableValue value={c[f]} type={type} onSave={(v) => saveIsp(c, f, v)} /></Cl2Row>)}
+            </details>))}
+        </div>
+      );
+    case "econModel":
+      return (
+        <div>
+          <DocShelfSection cfg={DOC_SHELVES.econmodel} property={property} supabaseClient={supabaseClient} userEmail={userEmail} />
+          {guidance && <div className="cl2-guide">Upload for now; building the model from here with a button comes later.</div>}
+          <DealTermsMini property={property} supabaseClient={supabaseClient} fields={[["total_value_to_owner", "Total value to owner", "number"], ["total_value_per_unit", "Value per unit", "number"], ["upfront_net", "Upfront (net)", "number"], ["rev_share_monthly_net", "Rev share / mo (net)", "number"]]} onLog={onLog} />
+        </div>
+      );
+    case "dealTerms":
+      return <DealTermsMini property={property} supabaseClient={supabaseClient} fields={[["wiring_ownership", "Wiring ownership", "text"], ["capex_owner", "CapEx — owner", "number"], ["capex_provider", "CapEx — provider", "number"], ["network_type", "Network", "text"], ["deal_structure", "Structure", "text"]]} onLog={onLog} />;
+    case "broadband":
+      return <BroadbandMini property={property} supabaseClient={supabaseClient} />;
+    case "decision": {
+      const cur = nextStepOf(program);
+      const rfpOn = isPhaseContracted(program, "rfp") || isPhaseContracted(program, "incumbentNegotiation");
+      const terms = ispTrackedTerms(property, ispList || []);
+      const soon = terms.terms[0];
+      const months = program.contractReviewMonths || DEFAULT_CONTRACT_REVIEW_MONTHS;
+      const reviewDate = soon && soon.term ? (() => { const d = parseDate(soon.term.date); d.setMonth(d.getMonth() - months); return d.toISOString().slice(0, 10); })() : null;
+      const rfpPhase = (program.phaseData || {}).rfp;
+      return (
+        <div>
+          <NextStepSelect program={program} onSetNextStep={onSetNextStep} guidance={guidance} />
+          {cur && cur.value === "rfp" && !rfpOn && <div className="cl2-guide" style={{ color: "#ffd98a", marginTop: 8 }}>RFP isn't on the executed advisory contract. Import the contract that covers it (Ironclad) so the RFP track opens.</div>}
+          {cur && cur.value === "rfp" && rfpOn && <div className="cl2-guide" style={{ marginTop: 8 }}>RFP track opens once Due Diligence is complete.</div>}
+          {cur && cur.value === "amendment" && rfpOn && !(rfpPhase && rfpPhase.done) && (
+            <div style={{ marginTop: 8 }}>
+              <div className="cl2-guide">RFP is on the contract but the client is skipping it.</div>
+              <button className="btn-ghost" onClick={() => onPatchProgram((pp) => ({ ...pp, phaseData: { ...pp.phaseData, rfp: { ...(pp.phaseData.rfp || {}), todos: ((pp.phaseData.rfp && pp.phaseData.rfp.todos) || defaultTodosFor("rfp")).map((t) => t.done ? t : { ...t, done: true, skipped: true }), done: true, completedDate: TODAY, skippedReason: "Advisory amendment selected after Due Diligence" } } }))}>Mark RFP track not needed</button>
+            </div>
+          )}
+          {cur && cur.value === "trackContract" && (
+            <div style={{ marginTop: 8 }}>
+              <Cl2Row label="Review point"><select className="cl2-input" value={months} onChange={(e) => onPatchProgram((pp) => ({ ...pp, contractReviewMonths: Number(e.target.value) }))}>
+                <option value={9}>9 months before term end</option><option value={12}>12 months before term end</option></select></Cl2Row>
+              <Cl2Row label="Tracked term ends">{soon && soon.term ? fmtDate(soon.term.date) : <span className="dim">{terms.needsChoice ? "Star a provider on the property record" : "No expiration on file"}</span>}</Cl2Row>
+              <Cl2Row label="Revisit on">{reviewDate ? <b>{fmtDate(reviewDate)}</b> : <span className="dim">—</span>}</Cl2Row>
+            </div>
+          )}
+        </div>
+      );
+    }
+    case "rfpDocs": {
+      const docs = rfpDocs || [];
+      return <div>{docs.length === 0 ? <div className="dim cl2-empty">No RFP documents yet.</div> : docs.map((d) => (
+        <Cl2Row key={d.id} label={d.title || d.kind || "RFP"}>{(d.file_path || d.link) ? <button className="cl2-link" onClick={() => openStoragePath(supabaseClient, d.file_path, d.link)}>Open ↗</button> : <span className="dim">awaiting file</span>}{d.sent_date ? ` · sent ${fmtDate(d.sent_date)}` : ""}</Cl2Row>))}
+        <button className="btn-ghost" style={{ marginTop: 6 }} onClick={onOpenRfp}>Open RFP Details</button></div>;
+    }
+    case "rfpProposals": {
+      const ps = rfpProposals || [];
+      if (!ps.length) return <div className="dim cl2-empty">No provider proposals yet.</div>;
+      const cols = [["Rate", (p) => p.bulk_rate_amount != null ? fmtMoneyMaybe(p.bulk_rate_amount) : p.bulk_rate], ["Term", (p) => p.term_text || (p.term_months ? `${p.term_months} mo` : null)], ["Door fee", (p) => p.door_fee_amount != null ? fmtMoneyMaybe(p.door_fee_amount) : p.door_fee], ["Rev share", (p) => p.rev_share], ["Speeds", (p) => p.speeds]];
+      return (
+        <div style={{ overflowX: "auto" }}>
+          <table className="cl2-table"><thead><tr><th>Provider</th>{cols.map(([h]) => <th key={h}>{h}</th>)}</tr></thead>
+            <tbody>{ps.map((p) => <tr key={p.id}><td>{p.provider || "—"}</td>{cols.map(([h, f]) => <td key={h}>{f(p) || "—"}</td>)}</tr>)}</tbody></table>
+          <button className="btn-ghost" style={{ marginTop: 6 }} onClick={onOpenRfp}>Edit in RFP Details</button>
+        </div>
+      );
+    }
+    case "sitePlans":
+      return <div><SitePlansSection property={property} supabaseClient={supabaseClient} userEmail={userEmail} /></div>;
+    default:
+      return null;
+  }
+}
+
+// deal_terms rows for one property, editable (corrections set verified).
+function DealTermsMini({ property, supabaseClient, fields, onLog }) {
+  const [rows, setRows] = useState(null);
+  const load = () => { if (!supabaseClient) return; supabaseClient.from("deal_terms").select("*").eq("property_code", property.code).order("doc_date", { ascending: false }).then(({ data }) => setRows(data || [])); };
+  useEffect(load, [property.code]);
+  if (rows == null) return <div className="dim cl2-empty">Loading deal terms…</div>;
+  if (!rows.length) return <div className="dim cl2-empty">No deal terms extracted for this property yet.</div>;
+  const save = async (r, f, v) => {
+    const { error } = await supabaseClient.from("deal_terms").update({ [f]: v, verified: true }).eq("id", r.id);
+    if (error) { window.alert(`Couldn't save: ${error.message}`); return; }
+    onLog(`Deal terms ${r.provider || r.doc_title || ""}: ${f}`, r[f], v, "Deal terms"); load();
+  };
+  return <div>{rows.map((r) => (
+    <div key={r.id} style={{ marginTop: 6 }}>
+      <div className="dim" style={{ fontSize: 11 }}>{r.doc_title || r.provider || r.doc_type}<SrcTag src={r.verified ? "verified" : "server"} /></div>
+      {fields.map(([f, label, type]) => <Cl2Row key={f} label={label}><EditableValue value={type === "number" && r[f] != null ? Number(r[f]) : r[f]} type={type} onSave={(v) => save(r, f, v)} /></Cl2Row>)}
+    </div>))}</div>;
+}
+
+function BroadbandMini({ property, supabaseClient }) {
+  const [row, setRow] = useState(undefined);
+  useEffect(() => { if (!supabaseClient) return; supabaseClient.from("property_broadband").select("*").eq("property_code", property.code).maybeSingle().then(({ data }) => setRow(data || null)); }, [property.code]);
+  const [open, setOpen] = useState(false);
+  if (row === undefined) return <div className="dim cl2-empty">Loading…</div>;
+  const providers = ((row && row.providers) || []).filter((p) => p.provider && (p.down > 0 || p.up > 0));
+  return (
+    <div>
+      {!row ? <div className="dim cl2-empty">Not matched yet (needs a street address).</div> : providers.length === 0 ? <div className="dim cl2-empty">No providers reported at this location.</div> : (
+        <table className="cl2-table"><thead><tr><th>Provider</th><th>Tech</th><th>Down</th></tr></thead>
+          <tbody>{providers.slice(0, 8).map((p, i) => <tr key={i} style={p.tech_code === 50 ? { fontWeight: 600 } : undefined}><td>{p.provider}</td><td>{p.technology}</td><td className="mono">{p.down}</td></tr>)}</tbody></table>
+      )}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+        <span className="dim" style={{ fontSize: 10.5 }}><SrcTag src="fcc" /> {row && row.fcc_as_of ? `as of ${fmtDate(row.fcc_as_of)}` : ""}</span>
+        <button className="btn-ghost" onClick={() => setOpen(true)}>Full view / pin location</button>
+      </div>
+      {open && <BroadbandModal property={property} supabaseClient={supabaseClient} onClose={() => setOpen(false)} />}
+    </div>
+  );
+}
+
+function ChecklistSidePanel({ phaseKey, todos, focusPanels, ...rest }) {
+  const keys = panelsForPhase(phaseKey, todos);
+  const refs = React.useRef({});
+  useEffect(() => {
+    const k = (focusPanels || [])[0];
+    if (k && refs.current[k]) refs.current[k].scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [focusPanels]);
+  if (!keys.length) return null;
+  return (
+    <div className="cl2-side">
+      {keys.map((k) => (
+        <div key={k} ref={(el) => { refs.current[k] = el; }} className={`cl2-card ${(focusPanels || []).includes(k) ? "cl2-card-focus" : ""}`}>
+          <div className="cl2-card-title">{PANEL_TITLES[k] || k}</div>
+          <ChecklistDataPanel panelKey={k} todos={todos} {...rest} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
    PHASE MODAL
 --------------------------------------------------------- */
 // Encapsulates everything about one checklist — email bar, the to-dos
@@ -5511,7 +6113,7 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
 // every ordinary phase, and twice side by side for the combined Program
 // Design & Contracting view, where each tile needs to behave completely
 // independently of the other.
-function TodoListPanel({ todos, subKey, milestoneKey, property, onToggleTodo, onAddTodo, onReassignTodo, onSetToggleWith, onSwapToggle, onUndoSwap, onUpdateTodoNotes }) {
+function TodoListPanel({ todos, subKey, milestoneKey, property, onToggleTodo, onAddTodo, onReassignTodo, onSetToggleWith, onSwapToggle, onUndoSwap, onUpdateTodoNotes, onSkipTodo, guidance, focusIdx, onFocusTodo }) {
   const [newTodo, setNewTodo] = useState("");
   const [expandedNotes, setExpandedNotes] = useState({});
   const [selectedEmailKey, setSelectedEmailKey] = useState(null);
@@ -5553,10 +6155,14 @@ function TodoListPanel({ todos, subKey, milestoneKey, property, onToggleTodo, on
         {(todos || []).length === 0 && <div className="dim" style={{ fontSize: 13 }}>No to-dos yet — add one below.</div>}
         {(todos || []).map((t, i) => {
           const expanded = !!expandedNotes[i];
-          const isDerived = t.text === ADVISORY_TRACKER_STEP || t.text === ADVISORY_DRAFT_STEP;
+          const isDerived = isDerivedTodo(t);
           const isKeyMilestone = KEY_MILESTONE_TODOS[milestoneKey] === t.text;
+          const prevSection = i > 0 ? (todos[i - 1].section || null) : null;
+          const showSection = t.section && t.section !== prevSection;
           return (
-            <div className="todo-block" key={i}>
+            <React.Fragment key={i}>
+            {showSection && <div className="cl2-section">{t.section}</div>}
+            <div className={`todo-block ${focusIdx === i ? "cl2-todo-focus" : ""}`}>
               <div className="todo-item todo-item-wrap">
                 <button
                   className="todo-check-row"
@@ -5565,13 +6171,20 @@ function TodoListPanel({ todos, subKey, milestoneKey, property, onToggleTodo, on
                   style={isDerived ? { cursor: "default", opacity: 0.85 } : undefined}
                 >
                   {t.done ? <CircleCheck size={16} color="#007B0C" /> : <Circle size={16} color="#B2B3B5" />}
-                  <span className={`${t.done ? "ms-done" : ""} ${isKeyMilestone ? "todo-key-milestone" : ""}`}>
+                  <span className={`${t.done ? "ms-done" : ""} ${isKeyMilestone ? "todo-key-milestone" : ""}`} style={t.skipped ? { opacity: 0.55 } : undefined}>
                     {t.text}
+                    {t.skipped && <span className="cl2-skip-tag">skipped</span>}
                     {t.text === ADVISORY_TRACKER_STEP && <span className="dim" style={{ fontSize: 11, fontStyle: "italic" }}> — auto-set from Contracted Options</span>}
                     {t.text === ADVISORY_DRAFT_STEP && <span className="dim" style={{ fontSize: 11, fontStyle: "italic" }}> — auto-set once the Ironclad draft date is on file</span>}
+                    {t.text === DD_SCOPE_STEP && <span className="dim" style={{ fontSize: 11, fontStyle: "italic" }}> — auto-set from the contract import</span>}
+                    {t.text === DD_DECISION_STEP && <span className="dim" style={{ fontSize: 11, fontStyle: "italic" }}> — set with the Next step dropdown{nextStepOf(property.program) ? `: ${nextStepOf(property.program).label}` : ""}</span>}
                     {t.approvalGate && <span className="dim" style={{ fontSize: 11, fontStyle: "italic" }}> — check = reviewed and approved, not just paused</span>}
                   </span>
                 </button>
+                {t.optional && onSkipTodo && (!t.done || t.skipped) && (
+                  <button className="todo-undo-btn" title={t.skipped ? "Mark as not skipped" : "Doesn't apply here: skip it (counts as done)"} onClick={() => onSkipTodo(i, subKey)}>{t.skipped ? "Unskip" : "Skip"}</button>
+                )}
+                {t.panel && onFocusTodo && <button className="todo-undo-btn" title="Show this item's tracker data on the right" onClick={() => onFocusTodo(i)}>Data ›</button>}
                 {t.due && !t.done && <span className={`mono todo-due ${parseDate(t.due) < parseDate(TODAY) ? "todo-overdue" : ""}`}>due {fmtDate(t.due)}</span>}
                 {t.blocked && !t.done && <span className="todo-blocked">blocked</span>}
                 <div className="todo-toggle-row">
@@ -5598,6 +6211,7 @@ function TodoListPanel({ todos, subKey, milestoneKey, property, onToggleTodo, on
               <button className="todo-note-toggle" onClick={() => toggleNote(i)}>
                 {expanded ? "▾" : "▸"} {t.notes ? "Note" : "+ note"}
               </button>
+              {guidance && t.guide && <div className="cl2-guide cl2-guide-todo">ⓘ {t.guide}</div>}
               {expanded && (
                 <textarea
                   className="todo-note-textarea"
@@ -5608,6 +6222,7 @@ function TodoListPanel({ todos, subKey, milestoneKey, property, onToggleTodo, on
                 />
               )}
             </div>
+            </React.Fragment>
           );
         })}
       </div>
@@ -5620,7 +6235,10 @@ function TodoListPanel({ todos, subKey, milestoneKey, property, onToggleTodo, on
   );
 }
 
-function PhaseModal({ property, phaseKey, onClose, onToggleTodo, onAddTodo, onToggleOption, onReassignTodo, onSetToggleWith, onSwapToggle, onUndoSwap, onUpdateTodoNotes, onOpenEconomicModel }) {
+function PhaseModal({ property, phaseKey, onClose, onToggleTodo, onAddTodo, onToggleOption, onReassignTodo, onSetToggleWith, onSwapToggle, onUndoSwap, onUpdateTodoNotes, onOpenEconomicModel, onSkipTodo, panelProps }) {
+  const [guidance, setGuidanceState] = useState(() => { try { return localStorage.getItem("cl2Guidance") !== "0"; } catch (e) { return true; } });
+  const setGuidance = (v) => { setGuidanceState(v); try { localStorage.setItem("cl2Guidance", v ? "1" : "0"); } catch (e) {} };
+  const [focus, setFocus] = useState(null); // { subKey, idx }
   const phases = buildPhases(property.program);
   let phase = phases.find((p) => p.key === phaseKey);
   let notContracted = false;
@@ -5650,10 +6268,18 @@ function PhaseModal({ property, phaseKey, onClose, onToggleTodo, onAddTodo, onTo
     }
   }
   if (!phase) return null;
+  // Two-column view: checklist on the left, the tracker data each item
+  // needs on the right (only for phases that have panels).
+  const flatTodos = phase.subPhases ? phase.subPhases.flatMap((sp) => sp.todos || []) : (phase.todos || []);
+  const sideKeys = panelProps ? panelsForPhase(storageKeyFor(phaseKey), flatTodos) : [];
+  const twoCol = sideKeys.length > 0 && !phase.subPhases;
+  const focusTodo = focus ? ((phase.subPhases ? ((phase.subPhases.find((sp) => sp.key === focus.subKey) || {}).todos || []) : (phase.todos || []))[focus.idx]) : null;
+  const focusPanels = focusTodo && focusTodo.panel ? focusTodo.panel : null;
+  const listExtras = { onSkipTodo, guidance };
 
   return (
     <div className="modal-overlay">
-      <div className={`modal modal-wide ${phase.subPhases ? "modal-dual-wide" : ""}`} onClick={(e) => e.stopPropagation()}>
+      <div className={`modal modal-wide ${phase.subPhases ? "modal-dual-wide" : ""} ${twoCol ? "modal-dual-wide" : ""}`} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
             <span className="mono tag-code">{property.code} · {property.name}</span>
@@ -5718,11 +6344,31 @@ function PhaseModal({ property, phaseKey, onClose, onToggleTodo, onAddTodo, onTo
           </>
         )}
 
-        <div className="dim" style={{ fontSize: 11.5, marginBottom: 12 }}>
-          To-dos are permanent — they can't be deleted, only checked, reassigned, or toggled between two parties.
+        <div className="dim" style={{ fontSize: 11.5, marginBottom: 12, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+          <span>To-dos are permanent — they can't be deleted, only checked, skipped (optional steps), reassigned, or toggled between two parties.</span>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", cursor: "pointer" }} title="Temporary meeting notes on each step">
+            <input type="checkbox" checked={guidance} onChange={(e) => setGuidance(e.target.checked)} /> Guidance notes
+          </label>
         </div>
+        {twoCol ? (
+          <div className="cl2-grid">
+            <div style={{ minWidth: 0 }}>
+              <div className="field-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <CheckSquare size={12} /> To-do list
+              </div>
+              <TodoListPanel
+                todos={phase.todos} subKey={undefined} milestoneKey={phaseKey} property={property}
+                onToggleTodo={onToggleTodo} onAddTodo={onAddTodo} onReassignTodo={onReassignTodo}
+                onSetToggleWith={onSetToggleWith} onSwapToggle={onSwapToggle} onUndoSwap={onUndoSwap}
+                onUpdateTodoNotes={onUpdateTodoNotes} {...listExtras}
+                focusIdx={focus ? focus.idx : null} onFocusTodo={(i) => setFocus({ subKey: undefined, idx: i })}
+              />
+            </div>
+            <ChecklistSidePanel phaseKey={storageKeyFor(phaseKey)} todos={phase.todos} focusPanels={focusPanels} property={property} guidance={guidance} {...panelProps} />
+          </div>
+        ) : null}
 
-        {phase.subPhases ? (
+        {twoCol ? null : phase.subPhases ? (
           <div className="dual-todo-grid">
             {phase.subPhases.map((sp) => (
               <div className="dual-todo-tile" key={sp.key}>
@@ -5734,7 +6380,7 @@ function PhaseModal({ property, phaseKey, onClose, onToggleTodo, onAddTodo, onTo
                   todos={sp.todos} subKey={sp.key} milestoneKey={sp.key} property={property}
                   onToggleTodo={onToggleTodo} onAddTodo={onAddTodo} onReassignTodo={onReassignTodo}
                   onSetToggleWith={onSetToggleWith} onSwapToggle={onSwapToggle} onUndoSwap={onUndoSwap}
-                  onUpdateTodoNotes={onUpdateTodoNotes}
+                  onUpdateTodoNotes={onUpdateTodoNotes} {...listExtras}
                 />
               </div>
             ))}
@@ -5748,7 +6394,7 @@ function PhaseModal({ property, phaseKey, onClose, onToggleTodo, onAddTodo, onTo
               todos={phase.todos} subKey={undefined} milestoneKey={phaseKey} property={property}
               onToggleTodo={onToggleTodo} onAddTodo={onAddTodo} onReassignTodo={onReassignTodo}
               onSetToggleWith={onSetToggleWith} onSwapToggle={onSwapToggle} onUndoSwap={onUndoSwap}
-              onUpdateTodoNotes={onUpdateTodoNotes}
+              onUpdateTodoNotes={onUpdateTodoNotes} {...listExtras}
             />
           </>
         )}
@@ -10372,6 +11018,10 @@ const SITE_PLAN_ACCEPT = ".pdf,.png,.jpg,.jpeg,.tif,.tiff,.dwg,.dxf";
 const DOC_SHELVES = {
   siteplans: { table: "site_plans", prefix: "siteplans", title: "Site Plans", one: "site plan", many: "site plans", accept: SITE_PLAN_ACCEPT,
     hint: "PDFs, usually; images and CAD files are kept too.", bulkHint: "Upload site plans (usually PDFs) for one or many properties at once." },
+  intake: { table: "intake_forms", prefix: "intake", title: "Intake Forms", one: "intake form", many: "intake forms", accept: ".pdf,.xlsx,.xls,.csv,.doc,.docx",
+    hint: "Completed client intake forms or the bulk intake Excel file.", bulkHint: "Upload completed client intake forms for one or many properties at once." },
+  econmodel: { table: "economic_models", prefix: "econmodels", title: "Economic Models", one: "economic model", many: "economic models", accept: ".xlsx,.xls,.xlsm,.csv,.pdf",
+    hint: "The Due Diligence baseline financial / economic model.", bulkHint: "Upload economic models for one or many properties at once." },
   buildingsystems: { table: "building_system_contracts", prefix: "buildingsystems", title: "Building Systems Contracts", one: "building systems contract", many: "building systems contracts", accept: ".pdf,.doc,.docx,.xlsx,.xls,.png,.jpg,.jpeg",
     hint: "Contracts for building systems such as access control, smart home, intercom, cameras or Wi-Fi; PDFs, usually.", bulkHint: "Upload building systems contracts (access control, smart home, intercom, cameras and the like) for one or many properties at once." },
 };
@@ -12329,7 +12979,9 @@ function App() {
         // whatever it happened to be initialized with.
         const mapped = data.map((row) => ({ id: row.id, code: row.code, name: row.name, program: row.program }));
         lastKnownPropertiesJSON.current = JSON.stringify(mapped);
-        setProperties(mapped);
+        // Checklist v2: saved checklists are moved onto the new templates once.
+        // lastKnown stays the raw server copy, so the save effect persists it.
+        setProperties(mapped.map((p) => ({ ...p, program: migrateChecklistV2(p.program) })));
       }
       const { data: regionRow } = await supabaseClient.from("app_state").select("value").eq("key", "regions").maybeSingle();
       if (regionRow && regionRow.value) {
@@ -12369,7 +13021,7 @@ function App() {
           if (data && pendingWriteCount.current === 0 && JSON.stringify(propertiesRef.current) === lastKnownPropertiesJSON.current) {
             const mapped = data.map((row) => ({ id: row.id, code: row.code, name: row.name, program: row.program }));
             lastKnownPropertiesJSON.current = JSON.stringify(mapped);
-            setProperties(mapped);
+            setProperties(mapped.map((p) => ({ ...p, program: migrateChecklistV2(p.program) })));
           }
         }).finally(() => {
           refetching = false;
@@ -12770,7 +13422,7 @@ function App() {
   // since it's a perpetual steady-state phase, not something that should
   // "complete" just because a checklist item got checked.
   const AUTO_COMPLETE_KEYS = ["dueDiligence", "advisory", "rfp", "incumbentNegotiation", "contractingLegal", "programDesign", "deployment"];
-  const toggleTodoGeneric = (propertyId, phaseKey, todoIdx) => {
+  const toggleTodoGeneric = (propertyId, phaseKey, todoIdx, mode) => {
     const storageKey = storageKeyFor(phaseKey);
     setProperties((prev) => prev.map((p) => {
       if (p.id !== propertyId) return p;
@@ -12778,21 +13430,28 @@ function App() {
       const current = storageKey === "prospecting" ? { ...stored, todos: withProspectStep(stored.todos) } : stored;
       const todo = current.todos[todoIdx];
       if (!todo) return p; // stale index — never crash the tracker over it
-      const newDone = !todo.done;
-      const newTodos = current.todos.map((t, idx) => idx !== todoIdx ? t : { ...t, done: newDone });
+      // mode "skip": an optional step that doesn't apply counts as done.
+      const skipping = mode === "skip";
+      const newDone = skipping ? !todo.skipped : !todo.done;
+      const newTodos = current.todos.map((t, idx) => {
+        if (idx !== todoIdx) return t;
+        const next = { ...t, done: newDone, doneDate: newDone ? (t.doneDate || TODAY) : null };
+        if (skipping) next.skipped = newDone; else if (!newDone) next.skipped = false;
+        return next;
+      });
       const patch = {};
       if (phaseKey === "dueDiligence" && todo.text === "Advisory Services contract executed") patch.ddContractExecuted = newDone ? TODAY : null;
       if (phaseKey === "advisory" && todo.text === "Advisory Services contract executed") patch.advisoryContractExecuted = newDone ? TODAY : null;
       if (phaseKey === "contractingLegal" && todo.text === "Final ISP agreement executed by owner; executed copy filed in SharePoint and logged in master tracker") patch.ispContractExecuted = newDone ? TODAY : null;
       if (phaseKey === "rfp" && todo.text === "Client selects vendor") patch.vendorSelectedDate = newDone ? TODAY : null;
       if (phaseKey === "incumbentNegotiation" && todo.text === "Client approves negotiated terms or elects to move to RFP") patch.vendorSelectedDate = newDone ? TODAY : null;
-      if (phaseKey === "dueDiligence" && todo.text === "Present findings to client") patch.ddFindingsPresentedDate = newDone ? TODAY : null;
+      if (phaseKey === "dueDiligence" && (todo.text === DD_PRESENTED_STEP || todo.text === "Present findings to client")) patch.ddFindingsPresentedDate = newDone ? TODAY : null;
       // Phase trigger: Prospecting → Initial Advisory Contracting.
       if (storageKey === "prospecting" && todo.text === PROSPECT_TO_CONTRACTING_STEP) patch.advisoryContractingStart = newDone ? (p.program.advisoryContractingStart || TODAY) : null;
 
       let phaseUpdate = { todos: newTodos };
       if (AUTO_COMPLETE_KEYS.includes(storageKey)) {
-        const allDone = newTodos.length > 0 && newTodos.every((t) => t.done);
+        const allDone = todosAllDone(effectiveTodosFor(p.program, storageKey, newTodos));
         // Quietly records the real completion date the moment every to-do
         // is checked — used to shift the next phase's start earlier when
         // work wraps ahead of the default schedule, and to eventually
@@ -12804,6 +13463,48 @@ function App() {
     }));
   };
   const toggleTodo = (i, subKey) => toggleTodoGeneric(phaseSel.propertyId, subKey || phaseSel.phaseKey, i);
+  const skipTodo = (i, subKey) => toggleTodoGeneric(phaseSel.propertyId, subKey || phaseSel.phaseKey, i, "skip");
+  // Generic program patch for one property (checklist data panel edits).
+  const patchProgramFor = (propertyId, updater) => {
+    setProperties((prev) => prev.map((p) => p.id !== propertyId ? p : { ...p, program: updater(p.program) }));
+  };
+  const updateAttributeFor = (propertyId, key, value) => patchProgramFor(propertyId, (pp) => ({ ...pp, attributes: { ...(pp.attributes || {}), [key]: value } }));
+  // Every panel edit is written to the Change Log as an info row.
+  const logPanelEdit = (propertyId, field, oldv, newv, source) => {
+    const p = properties.find((x) => x.id === propertyId);
+    if (!supabaseClient || !p) return;
+    const fmt = (v) => v == null || v === "" ? null : Array.isArray(v) ? v.join("; ") : String(v);
+    supabaseClient.from("master_sync_log").insert([{ property_code: p.code, property_name: p.name, action: "info", field,
+      old_value: fmt(oldv), new_value: fmt(newv), reason: `Edited in the checklist panel${session && session.user ? ` by ${session.user.email}` : ""}`, source: source || "Checklist panel" }])
+      .then(() => loadChangeLog());
+  };
+  // The Due Diligence next-step dropdown. Saves program.decision and its
+  // side effects; "closed" also closes the property (manualStatus).
+  const setNextStepFor = (propertyId, value, extra) => {
+    const who = session && session.user ? session.user.email : null;
+    const before = properties.find((x) => x.id === propertyId);
+    setProperties((prev) => prev.map((p) => {
+      if (p.id !== propertyId) return p;
+      let prog = { ...p.program, decision: value || null, decisionDate: value ? (p.program.decision === value && p.program.decisionDate ? p.program.decisionDate : TODAY) : null, decisionBy: value ? who : null };
+      if (value === "closed") {
+        prog = { ...prog, manualStatus: "Closed", closedDate: p.program.closedDate || TODAY, closedReason: (extra && extra.closedReason !== undefined) ? extra.closedReason : (p.program.closedReason || null) };
+      } else if (p.program.decision === "closed") {
+        prog = { ...prog, manualStatus: p.program.manualStatus === "Closed" ? null : p.program.manualStatus, closedDate: null };
+      }
+      if (value === "trackContract" && !prog.contractReviewMonths) prog.contractReviewMonths = DEFAULT_CONTRACT_REVIEW_MONTHS;
+      // Re-evaluate Due Diligence completion now that the derived step moved.
+      const dd = prog.phaseData && prog.phaseData.dueDiligence;
+      if (dd && Array.isArray(dd.todos)) {
+        const allDone = todosAllDone(effectiveTodosFor(prog, "dueDiligence", dd.todos));
+        prog = { ...prog, phaseData: { ...prog.phaseData, dueDiligence: { ...dd, done: allDone, completedDate: allDone ? (dd.completedDate || TODAY) : null } } };
+      }
+      return { ...p, program: prog };
+    }));
+    if (before && (before.program.decision || null) !== (value || null)) {
+      const lbl = (v) => (NEXT_STEP_OPTIONS.find((o) => o.value === v) || {}).label || v;
+      logPanelEdit(propertyId, "Next step (after Due Diligence)", before.program.decision ? lbl(before.program.decision) : null, value ? lbl(value) : null, "Next-step dropdown");
+    }
+  };
   const addTodo = (text, subKey) => mutatePhaseData((ph) => ({ ...ph, todos: [...(ph.todos || []), { text, done: false, responsible: "Advisory Services" }] }), subKey);
   const reassignTodo = (i, newResponsible, subKey) => mutatePhaseData((ph) => ({ ...ph, todos: ph.todos.map((t, idx) => idx !== i ? t : { ...t, responsible: newResponsible }) }), subKey);
   const setToggleWith = (i, partner, subKey) => mutatePhaseData((ph) => ({
@@ -13268,7 +13969,7 @@ function App() {
       )}
 
       {programProperty && !phaseSel && (
-        <ProgramModal property={programProperty} onClose={closeProgram} onOpenPhase={openPhaseFromProgram} onSetManualStatus={setManualStatus} onSetDecision={setDecision} onSetPriority={setPriority} onUpdateAttribute={updateAttribute} onUpdateNotes={updateNotes} onUpdateNotesLog={updateNotesLog} onSetDDDate={setDDDate} onToggleDueDiligence={toggleDueDiligenceSelected} onToggleServiceOption={toggleServiceOption} onSetServiceContractDate={setServiceContractDate} onSetISPDate={setISPDate} onSetExpectedTCO={setExpectedTCO} onSetDeploymentLiveDate={setDeploymentLiveDate} onSetBillingMilestone={setBillingMilestone} ispCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind !== "consulting").length : 0} consultCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind === "consulting").length : 0} ispProgram={programProperty ? ispCurrentProgram(ispContracts.filter((c) => c.property_code === programProperty.code)) : null} ispList={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code) : []} onSetTrackedProvider={setTrackedProvider} onOpenIspContracts={() => { if (!programProperty) return; setIspReturnTo(programPropertyId); setProgramPropertyId(null); setIspFor(programProperty.code); }} rfpProposals={programProperty ? rfpProposals.filter((x) => x.property_code === programProperty.code) : []} rfpDocs={programProperty ? rfpDocs.filter((d) => d.property_code === programProperty.code) : []}
+        <ProgramModal property={programProperty} onClose={closeProgram} onOpenPhase={openPhaseFromProgram} onSetManualStatus={setManualStatus} onSetDecision={setDecision} onSetNextStep={(v, extra) => setNextStepFor(programPropertyId, v, extra)} onSetPriority={setPriority} onUpdateAttribute={updateAttribute} onUpdateNotes={updateNotes} onUpdateNotesLog={updateNotesLog} onSetDDDate={setDDDate} onToggleDueDiligence={toggleDueDiligenceSelected} onToggleServiceOption={toggleServiceOption} onSetServiceContractDate={setServiceContractDate} onSetISPDate={setISPDate} onSetExpectedTCO={setExpectedTCO} onSetDeploymentLiveDate={setDeploymentLiveDate} onSetBillingMilestone={setBillingMilestone} ispCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind !== "consulting").length : 0} consultCount={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code && c.doc_kind === "consulting").length : 0} ispProgram={programProperty ? ispCurrentProgram(ispContracts.filter((c) => c.property_code === programProperty.code)) : null} ispList={programProperty ? ispContracts.filter((c) => c.property_code === programProperty.code) : []} onSetTrackedProvider={setTrackedProvider} onOpenIspContracts={() => { if (!programProperty) return; setIspReturnTo(programPropertyId); setProgramPropertyId(null); setIspFor(programProperty.code); }} rfpProposals={programProperty ? rfpProposals.filter((x) => x.property_code === programProperty.code) : []} rfpDocs={programProperty ? rfpDocs.filter((d) => d.property_code === programProperty.code) : []}
           onOpenRfp={() => { if (!programProperty) return; setIspReturnTo(programPropertyId); setProgramPropertyId(null); setRfpFor(programProperty.code); }}
           onViewRfp={(d) => { if (d) { rfpOpenDoc(supabaseClient, d).catch((x) => window.alert(`Couldn't open the RFP: ${x.message}`)); } else if (programProperty) { setIspReturnTo(programPropertyId); setProgramPropertyId(null); setRfpFor(programProperty.code); } }} regionsList={regionsList} onAddRegion={addRegion} currentUserEmail={session && session.user ? session.user.email : null} supabaseClient={supabaseClient} />
       )}
@@ -13287,6 +13988,20 @@ function App() {
           onUndoSwap={undoSwap}
           onUpdateTodoNotes={updateTodoNotes}
           onOpenEconomicModel={() => setEconModelOpen(true)}
+          onSkipTodo={skipTodo}
+          panelProps={{
+            ispList: ispContracts.filter((c) => c.property_code === phaseProperty.code),
+            rfpProposals: rfpProposals.filter((x) => x.property_code === phaseProperty.code),
+            rfpDocs: rfpDocs.filter((d) => d.property_code === phaseProperty.code),
+            callNotes, supabaseClient, userEmail: session && session.user ? session.user.email : null,
+            onPatchProgram: (fn) => patchProgramFor(phaseProperty.id, fn),
+            onUpdateAttribute: (k, v) => updateAttributeFor(phaseProperty.id, k, v),
+            onSetNextStep: (v, extra) => setNextStepFor(phaseProperty.id, v, extra),
+            onIspChanged: loadIspContracts,
+            onLog: (field, oldv, newv, source) => logPanelEdit(phaseProperty.id, field, oldv, newv, source),
+            onOpenIspContracts: () => { setIspReturnTo(phaseProperty.id); setPhaseSel(null); setProgramPropertyId(null); setIspFor(phaseProperty.code); },
+            onOpenRfp: () => { setIspReturnTo(phaseProperty.id); setPhaseSel(null); setProgramPropertyId(null); setRfpFor(phaseProperty.code); },
+          }}
         />
       )}
 
