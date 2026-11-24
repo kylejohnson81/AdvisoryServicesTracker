@@ -58,8 +58,24 @@ def ingest(payload):
     return r.json()
 
 
+def clean_secret(v):
+    """Pasted secrets can carry spaces, line breaks or invisible/curly characters; keep printable ASCII only."""
+    return "".join(ch for ch in v if 33 <= ord(ch) <= 126)
+
+
+def check_fcc_secrets():
+    for name in ("FCC_USERNAME", "FCC_API_TOKEN"):
+        raw = os.environ.get(name, "")
+        kept = clean_secret(raw)
+        print(f"{name}: {len(raw)} chars pasted, {len(kept)} usable" + ("" if kept else " -- EMPTY, re-enter this secret"))
+        if not kept:
+            sys.exit(1)
+    if "@" not in clean_secret(os.environ.get("FCC_USERNAME", "")):
+        sys.exit("FCC_USERNAME should be the email address you sign in to broadbandmap.fcc.gov with")
+
+
 def fcc_get(path, stream=False):
-    h = {"username": "".join(os.environ["FCC_USERNAME"].split()), "hash_value": "".join(os.environ["FCC_API_TOKEN"].split())}  # pasted secrets may carry spaces/newlines
+    h = {"username": clean_secret(os.environ.get("FCC_USERNAME", "")), "hash_value": clean_secret(os.environ.get("FCC_API_TOKEN", ""))}
     for attempt in range(4):
         r = requests.get(f"{FCC}/{path}", headers=h, stream=stream, timeout=600)
         if r.status_code in (429, 500, 502, 503, 504):
@@ -147,6 +163,7 @@ def main():
     print(f"{len(place)} placed, {len(no_match)} without a usable address")
 
     # 2. latest FCC availability release
+    check_fcc_secrets()
     dates = fcc_get("listAsOfDates").json().get("data", [])
     as_of = max(d["as_of_date"][:10] for d in dates if d.get("data_type") == "availability")
     print(f"FCC availability as of {as_of}")
