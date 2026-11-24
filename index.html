@@ -4789,7 +4789,7 @@ function BroadbandModal({ property, supabaseClient, onClose }) {
     const { error } = await supabaseClient.from("property_broadband").update({ override_location_id: v }).eq("property_code", property.code);
     setPinMsg(error ? `Couldn't save: ${error.message}` : v ? "Saved. The next weekly import uses this exact FCC location." : "Cleared. Matching goes back to the census block.");
   };
-  const providers = (row && row.providers) || [];
+  const providers = ((row && row.providers) || []).filter((p) => p.provider && (p.down > 0 || p.up > 0));
   const fmtSpeed = (n) => (n >= 1000 && n % 1000 === 0 ? `${n / 1000} Gbps` : `${Math.round(n * 10) / 10}`);
   const fccLink = row && row.location_ids && row.location_ids.length === 1
     ? `https://broadbandmap.fcc.gov/location-summary/fixed?location_id=${row.location_ids[0]}`
@@ -4822,7 +4822,7 @@ function BroadbandModal({ property, supabaseClient, onClose }) {
             <div style={{ fontSize: 12.5, marginBottom: 4 }}>{row.address_used || "No address"}</div>
             <div className="dim" style={{ fontSize: 11.5, marginBottom: 12 }}>
               {matchText}{row.fcc_as_of ? ` FCC data as of ${fmtDate(row.fcc_as_of)}.` : ""}{" "}
-              <a href={fccLink} target="_blank" rel="noopener noreferrer">View on FCC map ↗</a>
+              <a href={fccLink} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)" }}>View on FCC map ↗</a>
             </div>
             {providers.length > 0 && (
               <>
