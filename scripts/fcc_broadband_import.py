@@ -111,6 +111,12 @@ def open_csv(path):
 
 def main():
     targets = ingest({"action": "targets"})["targets"]
+    for t in targets:  # some attributes are stored as numbers (e.g. ZIP 2116 for 02116)
+        for k in ("address", "city", "state", "zip"):
+            t[k] = "" if t.get(k) is None else str(t[k]).strip()
+        z = t["zip"].split(".")[0].split("-")[0]
+        if z.isdigit() and len(z) < 5:
+            t["zip"] = z.zfill(5)
     print(f"{len(targets)} tracker properties")
 
     # 1. geocode where the address is new or changed
