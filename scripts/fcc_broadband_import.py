@@ -59,7 +59,7 @@ def ingest(payload):
 
 
 def fcc_get(path, stream=False):
-    h = {"username": os.environ["FCC_USERNAME"], "hash_value": os.environ["FCC_API_TOKEN"]}
+    h = {"username": "".join(os.environ["FCC_USERNAME"].split()), "hash_value": "".join(os.environ["FCC_API_TOKEN"].split())}  # pasted secrets may carry spaces/newlines
     for attempt in range(4):
         r = requests.get(f"{FCC}/{path}", headers=h, stream=stream, timeout=600)
         if r.status_code in (429, 500, 502, 503, 504):
