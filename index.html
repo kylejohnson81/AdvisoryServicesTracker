@@ -4821,7 +4821,7 @@ function BroadbandModal({ property, supabaseClient, onClose }) {
           <div style={{ paddingTop: 12 }}>
             <div style={{ fontSize: 12.5, marginBottom: 4 }}>{row.address_used || "No address"}</div>
             <div className="dim" style={{ fontSize: 11.5, marginBottom: 12 }}>
-              {matchText}{row.fcc_as_of ? ` FCC data as of ${fmtDate(row.fcc_as_of)}.` : ""}{" "}
+              {matchText}{row.geocode_source === "openstreetmap" ? " Address located via OpenStreetMap (not yet in the Census address database)." : ""}{row.fcc_as_of ? ` FCC data as of ${fmtDate(row.fcc_as_of)}.` : ""}{" "}
               <a href={fccLink} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)" }}>View on FCC map ↗</a>
             </div>
             {providers.length > 0 && (

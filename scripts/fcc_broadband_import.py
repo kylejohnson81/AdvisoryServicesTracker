@@ -111,7 +111,56 @@ def geocode(targets):
             lon, lat = (float(v) for v in row[5].split(","))
         except ValueError:
             continue
-        out[row[0]] = (lat, lon, f"{row[8]}{row[9]}{row[10]}{row[11]}")
+        out[row[0]] = (lat, lon, f"{row[8]}{row[9]}{row[10]}{row[11]}", "census")
+    return out
+
+
+def census_block_at(lat, lon):
+    """2020 census block GEOID for a point (Census geographies-by-coordinates)."""
+    r = requests.get("https://geocoding.geo.census.gov/geocoder/geographies/coordinates",
+                     params={"x": lon, "y": lat, "benchmark": "Public_AR_Current", "vintage": "Current_Current",
+                             "layers": "Census Blocks", "format": "json"}, timeout=60)
+    r.raise_for_status()
+    geos = r.json().get("result", {}).get("geographies", {})
+    for k, v in geos.items():
+        if "block" in k.lower() and v:
+            return v[0].get("GEOID")
+    return None
+
+
+def osm_point(t):
+    """OpenStreetMap (Nominatim) lookup for addresses the Census database doesn't have yet,
+    typically new construction. Free; at most one request per second per their usage policy."""
+    ua = {"User-Agent": "GreystarAdvisoryServicesTracker/1.0 (github.com/kylejohnson81/AdvisoryServicesTracker)"}
+    attempts = [{"street": t["address"], "city": t["city"], "state": t["state"], "postalcode": t["zip"]},
+                {"street": t["address"], "city": t["city"], "state": t["state"]},
+                {"q": full_address(t)}]
+    for params in attempts:
+        params = {k: v for k, v in params.items() if v}
+        params.update({"format": "jsonv2", "limit": 1, "countrycodes": "us"})
+        time.sleep(1.1)
+        try:
+            r = requests.get("https://nominatim.openstreetmap.org/search", params=params, headers=ua, timeout=60)
+            hits = r.json() if r.status_code == 200 else []
+        except (requests.RequestException, ValueError):
+            hits = []
+        if hits:
+            return float(hits[0]["lat"]), float(hits[0]["lon"])
+    return None
+
+
+def geocode_fallback(targets):
+    out = {}
+    for t in targets:
+        pt = osm_point(t)
+        if not pt:
+            continue
+        try:
+            block = census_block_at(*pt)
+        except requests.RequestException:
+            block = None
+        if block:
+            out[t["code"]] = (pt[0], pt[1], block, "openstreetmap")
     return out
 
 
@@ -139,7 +188,12 @@ def main():
     need_geo = [t for t in targets if t["address"].strip() and (FORCE or not t["current"] or not t["current"].get("block_geoid")
                 or t["current"].get("address_used") != full_address(t))]
     geo = geocode(need_geo)
-    print(f"geocoded {len(geo)} of {len(need_geo)} that needed it")
+    print(f"geocoded {len(geo)} of {len(need_geo)} that needed it (Census)")
+    missed = [t for t in need_geo if t["code"] not in geo]
+    if missed:
+        extra = geocode_fallback(missed)
+        geo.update(extra)
+        print(f"  OpenStreetMap fallback placed {len(extra)} of {len(missed)} more")
 
     place = {}  # code -> dict(lat, lon, block, state_fips, address_used, geocoded_at, override)
     no_match = []
@@ -150,8 +204,8 @@ def main():
             no_match.append({"property_code": t["code"], "match_type": "no_address", "providers": [], "checked_at": now_iso()})
             continue
         if t["code"] in geo:
-            lat, lon, block = geo[t["code"]]
-            place[t["code"]] = dict(lat=lat, lon=lon, block=block, geocoded_at=now_iso(), address_used=full_address(t), override=override, fresh=True)
+            lat, lon, block, src = geo[t["code"]]
+            place[t["code"]] = dict(lat=lat, lon=lon, block=block, geocoded_at=now_iso(), address_used=full_address(t), override=override, fresh=True, source=src)
         elif cur.get("block_geoid") and cur.get("address_used") == full_address(t):
             place[t["code"]] = dict(lat=cur.get("lat"), lon=cur.get("lon"), block=cur["block_geoid"], geocoded_at=None,
                                     address_used=cur.get("address_used"), override=override, fresh=False)
@@ -263,6 +317,8 @@ def main():
                "providers": providers, "fcc_as_of": as_of, "checked_at": now_iso()}
         if p["geocoded_at"]:
             row["geocoded_at"] = p["geocoded_at"]
+        if p.get("source"):
+            row["geocode_source"] = p["source"]
         out.append(row)
     for i in range(0, len(out), 50):
         ingest({"action": "upsert", "rows": out[i:i + 50]})
