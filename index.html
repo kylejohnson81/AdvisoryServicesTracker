@@ -1049,6 +1049,7 @@ function CheckSquare(p) { return <IconBase {...p}><polyline points="9 11 12 14 2
 function ChevronDown(p) { return <IconBase {...p}><polyline points="6 9 12 15 18 9"/></IconBase>; }
 function Eye(p) { return <IconBase {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></IconBase>; }
 function EyeOff(p) { return <IconBase {...p}><path d="M17.94 17.94A10.94 10.94 0 0 1 12 20c-7 0-11-8-11-8a18.4 18.4 0 0 1 4.22-5.44M9.9 4.24A10.4 10.4 0 0 1 12 4c7 0 11 8 11 8a18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></IconBase>; }
+function Wifi(p) { return <IconBase {...p}><path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/><path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></IconBase>; }
 function FileText(p) { return <IconBase {...p}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><line x1="8" y1="9" x2="10" y2="9"/></IconBase>; }
 
 
@@ -4762,9 +4763,115 @@ function NoteBody({ text }) {
   );
 }
 
+// FCC National Broadband Map availability for one property. Data comes from
+// public.property_broadband, filled by the weekly GitHub Action
+// (scripts/fcc_broadband_import.py) from the FCC's official public data,
+// matched to the property automatically by census block from its address.
+function BroadbandModal({ property, supabaseClient, onClose }) {
+  const [row, setRow] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [pin, setPin] = useState("");
+  const [pinMsg, setPinMsg] = useState("");
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      if (!supabaseClient) { setErr("Not connected."); setLoading(false); return; }
+      const { data, error } = await supabaseClient.from("property_broadband").select("*").eq("property_code", property.code).maybeSingle();
+      if (!live) return;
+      if (error) setErr(error.message); else { setRow(data); setPin((data && data.override_location_id) || ""); }
+      setLoading(false);
+    })();
+    return () => { live = false; };
+  }, [property.code]);
+  const savePin = async () => {
+    const v = pin.trim() || null;
+    const { error } = await supabaseClient.from("property_broadband").update({ override_location_id: v }).eq("property_code", property.code);
+    setPinMsg(error ? `Couldn't save: ${error.message}` : v ? "Saved. The next weekly import uses this exact FCC location." : "Cleared. Matching goes back to the census block.");
+  };
+  const providers = (row && row.providers) || [];
+  const fmtSpeed = (n) => (n >= 1000 && n % 1000 === 0 ? `${n / 1000} Gbps` : `${Math.round(n * 10) / 10}`);
+  const fccLink = row && row.location_ids && row.location_ids.length === 1
+    ? `https://broadbandmap.fcc.gov/location-summary/fixed?location_id=${row.location_ids[0]}`
+    : row && row.lat ? `https://broadbandmap.fcc.gov/location-summary/fixed?vlat=${row.lat}&vlon=${row.lon}&zoom=17` : "https://broadbandmap.fcc.gov/home";
+  const matchText = !row ? "" : {
+    block: `Matched by census block — ${row.location_count} FCC location${row.location_count === 1 ? "" : "s"} in the block${row.location_count > 1 ? ", so neighboring buildings may be included" : ""}.`,
+    area: `Matched by area — no FCC locations in the property's census block, so this shows the surrounding hexagon (${row.location_count} locations). Treat as approximate.`,
+    override: "Pinned to one FCC location.",
+    no_address: "This property has no street address yet, so it can't be matched.",
+    no_geocode: "The Census geocoder couldn't place this address. Check the street address, or pin an FCC location ID below.",
+    no_fcc_locations: "The address was placed, but the FCC has no locations there. Pin an FCC location ID below if you know it.",
+  }[row.match_type] || "";
+  const hasFiber = providers.some((p) => p.tech_code === 50);
+  return (
+    <div className="modal-overlay">
+      <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 720 }}>
+        <div className="modal-head" style={{ borderBottom: "1px solid var(--line)" }}>
+          <h2 style={{ color: "var(--txt)" }}>Broadband — {property.name}</h2>
+          <button className="icon-btn" onClick={onClose}><X size={18} /></button>
+        </div>
+        {loading ? <div className="dim" style={{ padding: "14px 0" }}>Loading…</div>
+        : err ? <div style={{ color: "#ffd98a", padding: "14px 0" }}>{err}</div>
+        : !row ? (
+          <div className="dim" style={{ padding: "14px 0", fontSize: 13 }}>
+            Not checked yet. Every property with a street address is matched automatically by the weekly FCC import; this one will appear after the next run.
+            {" "}<a href="https://broadbandmap.fcc.gov/home" target="_blank" rel="noopener noreferrer">Open the FCC map</a>
+          </div>
+        ) : (
+          <div style={{ paddingTop: 12 }}>
+            <div style={{ fontSize: 12.5, marginBottom: 4 }}>{row.address_used || "No address"}</div>
+            <div className="dim" style={{ fontSize: 11.5, marginBottom: 12 }}>
+              {matchText}{row.fcc_as_of ? ` FCC data as of ${fmtDate(row.fcc_as_of)}.` : ""}{" "}
+              <a href={fccLink} target="_blank" rel="noopener noreferrer">View on FCC map ↗</a>
+            </div>
+            {providers.length > 0 && (
+              <>
+                {hasFiber && <div style={{ fontSize: 12.5, marginBottom: 8, color: "var(--accent)" }}>Fiber to the premises is reported here.</div>}
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                  <thead>
+                    <tr style={{ textAlign: "left", borderBottom: "1px solid var(--line)" }}>
+                      <th style={{ padding: "6px 4px" }}>Provider</th><th style={{ padding: "6px 4px" }}>Technology</th>
+                      <th style={{ padding: "6px 4px", textAlign: "right" }}>Down (Mbps)</th><th style={{ padding: "6px 4px", textAlign: "right" }}>Up (Mbps)</th>
+                      {row.location_count > 1 && <th style={{ padding: "6px 4px", textAlign: "right" }}>Locations</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {providers.map((p, i) => (
+                      <tr key={i} style={{ borderBottom: "1px solid var(--line)", background: p.tech_code === 50 ? "rgba(80,160,255,0.10)" : "transparent", fontWeight: p.tech_code === 50 ? 600 : 400 }}>
+                        <td style={{ padding: "6px 4px" }}>{p.provider}</td>
+                        <td style={{ padding: "6px 4px" }}>{p.technology}</td>
+                        <td className="mono" style={{ padding: "6px 4px", textAlign: "right" }}>{fmtSpeed(p.down)}</td>
+                        <td className="mono" style={{ padding: "6px 4px", textAlign: "right" }}>{fmtSpeed(p.up)}</td>
+                        {row.location_count > 1 && <td className="mono" style={{ padding: "6px 4px", textAlign: "right" }}>{p.locations}/{row.location_count}</td>}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="dim" style={{ fontSize: 11, marginTop: 6 }}>Residential and mixed-use service as reported to the FCC; satellite not shown. Fastest advertised tier per provider and technology.</div>
+              </>
+            )}
+            <div className="field-label" style={{ marginTop: 16 }}>Pin to an FCC location (optional)</div>
+            <div className="dim" style={{ fontSize: 11.5, marginBottom: 6 }}>Only if the match looks wrong: paste the location_id from the FCC map's address bar.</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input value={pin} onChange={(e) => setPin(e.target.value)} placeholder="FCC location_id" style={{ flex: 1 }} />
+              <button className="btn-ghost" onClick={savePin}>Save</button>
+            </div>
+            {pinMsg && <div className="dim" style={{ fontSize: 11.5, marginTop: 6 }}>{pinMsg}</div>}
+            <div className="dim" style={{ fontSize: 11, marginTop: 10 }}>Last checked {row.checked_at ? new Date(row.checked_at).toLocaleDateString() : "—"}. Refreshed weekly.</div>
+          </div>
+        )}
+        <div className="modal-actions">
+          <button className="btn-primary" onClick={onClose}>Done</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSetDecision, onSetPriority, onUpdateAttribute, onUpdateNotes, onUpdateNotesLog, onSetDDDate, onToggleDueDiligence, onToggleServiceOption, onSetServiceContractDate, onSetISPDate, onSetExpectedTCO, onSetDeploymentLiveDate, onSetBillingMilestone, ispCount, consultCount, ispProgram, onOpenIspContracts, ispList, onSetTrackedProvider, rfpProposals, rfpDocs, onOpenRfp, onViewRfp, regionsList, onAddRegion, currentUserEmail, supabaseClient }) {
   const [notesOpen, setNotesOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [broadbandOpen, setBroadbandOpen] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState(null);
   const [historyOpenFor, setHistoryOpenFor] = useState({});
   const [composerOpen, setComposerOpen] = useState(false);
@@ -4978,6 +5085,9 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
           <button className="btn-ghost" onClick={() => setHistoryOpen(true)}>
             <FileText size={13} /> History {historyNotes.length === 0 ? "(none yet)" : `(${historyNotes.length})`}
           </button>
+          <button className="btn-ghost" onClick={() => setBroadbandOpen(true)}>
+            <Wifi size={13} /> Broadband
+          </button>
         </div>
 
         {notesOpen && (
@@ -5055,6 +5165,8 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
             </div>
           </div>
         )}
+
+        {broadbandOpen && <BroadbandModal property={property} supabaseClient={supabaseClient} onClose={() => setBroadbandOpen(false)} />}
 
         <div className="section-header">Attributes</div>
         <div className="dim" style={{ fontSize: 11.5, marginBottom: 8 }}>

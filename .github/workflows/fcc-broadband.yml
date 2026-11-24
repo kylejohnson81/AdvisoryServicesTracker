@@ -1,0 +1,31 @@
+name: FCC broadband import
+
+# Weekly: matches new/changed property addresses and picks up new FCC data
+# releases (only refreshes what changed). Run manually any time from the
+# Actions tab; tick "force" to re-pull everything.
+on:
+  schedule:
+    - cron: "17 10 * * 1"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Re-geocode and re-pull every property"
+        type: boolean
+        default: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests h3
+      - run: python scripts/fcc_broadband_import.py
+        env:
+          FCC_USERNAME: ${{ secrets.FCC_USERNAME }}
+          FCC_API_TOKEN: ${{ secrets.FCC_API_TOKEN }}
+          BROADBAND_INGEST_KEY: ${{ secrets.BROADBAND_INGEST_KEY }}
+          FORCE: ${{ inputs.force }}
