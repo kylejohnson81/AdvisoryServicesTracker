@@ -1607,7 +1607,7 @@ function finishTemplate(rows, done) {
 const PHASE_NOTES = {
   prospecting: "Prospecting is non-linear: referrals, development deals and other prospects can skip standard steps. Client and RPM / property-team emails split by Greystar managed vs non-Greystar managed. Client intake moved to Initial Advisory Contracting; ISP contract requests moved to Due Diligence.",
   advisory: "Intake moved here. The agreement runs drafting → business-term approval → client delivery → iterative redlines → execution, with a ball-in-court toggle. Ironclad data that already imports automatically is not re-entered.",
-  dueDiligence: "Data gathering follows an email sequence that starts with a flagged template email. The phase ends with the client next-step dropdown. Choosing Run RFP credits 100% of the Due Diligence fee.",
+  dueDiligence: "Scope fills in from the contract import and the DD fee is invoiced automatically. Data gathering follows an email sequence that starts with a flagged template email. The phase ends with the client next-step dropdown.",
   planning: "Placeholder: Advisory Service Amendment is new. It sits before RFP and is one of the next-step options at the end of Due Diligence. Agreement and Execution mirror Initial Advisory Contracting; other to-dos still need to be defined.",
   contractingLegal: "Second section under Program Design. Carries over the former ISP Contracting & Documentation tasks, including the Incumbent Negotiation Track tasks.",
   ongoing: "Ongoing Services is really the post-deployment list. True to-dos still need to be set; these combine the existing Ongoing Management and Post-Deployment Validation items as a starting point.",
@@ -1624,17 +1624,17 @@ function prospectingTemplate(done) {
     TD(0, "Discovery"),
     TD(1, "Initial contact made and Advisory Services offering introduced", AS, { panel: ["contacts"], optional: true,
       guide: "Order is flexible: referrals and development deals can skip standard steps." }),
-    TD(1, "Advisory Services overview and contract PDF sent to client", AS, { flag: "Template email", panel: ["contractDocs"],
+    TD(1, "Discovery call scheduled", AS, { panel: ["callNotes"], optional: true }),
+    TD(1, "Advisory Services overview and contract PDF sent to client", AS, { flag: "Template email", panel: ["contractDocs"], guide: "Goes out after the discovery call (11-23 meeting).",
       emailTemplates: [{ label: "Email template", subject: "Greystar Advisory Services — Overview & Agreement — {{property}}", body: "Hello,\n\nThank you for your time. Attached are an overview of Greystar Advisory Services and our agreement for {{property}}.\n\nPlease let us know if you have any questions.\n\nThank you,\nAdvisory Service Team" }] }),
     TD(2, "Greystar managed", AS, { optional: true, guide: "Mark the branch that doesn't apply N/A." }),
     TD(2, "Non-Greystar managed", AS, { optional: true, panel: ["intake"], guide: "No PMA: include the intake form and one-page services overview." }),
-    TD(1, "Discovery call scheduled", AS, { panel: ["callNotes"], optional: true }),
     TD(1, "Template email sent to RPM and property team", AS, { flag: "Template email", panel: ["contacts"], emailTemplates: [RPM_AWARENESS_TPL],
       guide: "Trigger timing still open: at contracting, or earlier for some existing properties." }),
     TD(2, "Greystar managed", AS, { optional: true }),
     TD(2, "Non-Greystar managed", AS, { optional: true }),
     TD(1, "Additional project-oversight needs identified", AS, { flag: "Project oversight", panel: ["discoveryFlags"] }),
-    TD(1, "Other national contracting services and technology partners discussed", AS, { flag: "National contracting / technology partners", panel: ["discoveryFlags"] }),
+    TD(1, "Additional building-technology needs identified", AS, { flag: "Building technology", panel: ["discoveryFlags"] }),
     TD(0, "Next steps"),
     TD(1, "Client and property details reviewed and verified in tracker", AS, { panel: ["property"],
       guide: "Digest-added prospects can arrive with partial client/property info." }),
@@ -1664,6 +1664,7 @@ const AGREEMENT_ROWS = () => [
   TD(1, "Client and NSC redlines completed", "Client", { toggleWith: "NSC", rounds: 0, tag: "Ball in court, repeats until final",
     guide: "Press ⇄ each time redlines change hands. R# counts the rounds." }),
   TD(1, "Agreement finalized for execution", "NSC"),
+  TD(1, "Form sent to Client Services", AS, { guide: "Open: which form, the hand-off process, and who owns it." }),
   TD(0, "Execution", "Client Services"),
   TD(1, "Contract sent out for signatures", "Client Services", { emailTemplates: [
     { label: "Email template", subject: "Signature Requested — {{property}} Agreement", body: "Hi,\n\nThe agreement for {{property}} is ready for signature. Please let us know if you have any questions.\n\nThank you for your partnership.\n\nBest,\nGreystar Advisory Services" },
@@ -1680,6 +1681,8 @@ function advisoryTemplate(done) {
       emailTemplates: [
         { label: "Email template", subject: "Client Intake Form — {{property}}", body: "Hi,\n\nTo define the advisory-services scope for {{property}}, please complete the attached client intake form (or the bulk intake Excel file for multiple properties).\n\nBest,\nGreystar Advisory Services" },
         { label: "2-week reminder", subject: "Reminder: Client Intake Form — {{property}}", body: "Hi,\n\nJust following up on the client intake form for {{property}}. Once it's back we can confirm scope and get the agreement drafted.\n\nThanks,\nGreystar Advisory Services" }] }),
+    TD(1, "Client completed intake form or bulk intake Excel", "Client", { optional: true, panel: ["intake"],
+      guide: "Reminder email is due 2 weeks after the form was sent (see panel). Who owns the automation is still open." }),
     TD(1, "Worked with client to define which services to proceed with", AS, { panel: ["terms"] }),
     ...AGREEMENT_ROWS(),
     TD(0, "Tracker", "ROVR"),
@@ -1707,14 +1710,12 @@ function planningTemplate(done) {
 function ddTemplate(done) {
   return finishTemplate([
     TD(0, "Engagement", "Client Services"),
-    TD(1, DD_SCOPE_STEP, "Client Services", { toggleWith: "Client", rounds: 0, derived: true, panel: ["terms"],
-      guide: "Checks itself from the Ironclad import (Due Diligence executed on the advisory contract)." }),
-    TD(1, "Due Diligence fee invoiced", "Client Services", { panel: ["billing"] }),
+    TD(1, DD_SCOPE_STEP, "Client Services", { derived: true, panel: ["terms", "billing"],
+      guide: "Fills itself from the Ironclad contract import. The DD fee is invoiced by the billing automation, not a manual to-do (11-23 meeting)." }),
     TD(0, "Data Gathering"),
     TD(1, "ISP contracts requested for each property", AS, { flag: "Template email: data request", panel: ["contacts", "ispRequest"],
-      emailTemplates: [{ label: "Email template", to: "{{rpmEmail}}", subject: "ISP Contracts Needed — {{property}}", body: "Hi,\n\nAs part of Greystar Advisory Services Due Diligence for {{property}}, we need copies of every ISP / telecom agreement in place at the property (internet, TV, Wi-Fi, rights of entry, marketing agreements).\n\n[Scott's property-contract collection instructions]\n\nFCC map: you can check providers reported at the address at https://broadbandmap.fcc.gov.\n\nThank you,\nAdvisory Service Team" }] }),
-    TD(1, "Contract upload (Formstack) link sent", AS, { flag: "Template email", panel: ["ispRequest"],
-      emailTemplates: [{ label: "Email template", to: "{{rpmEmail}}", subject: "Upload Link: ISP Contracts & Telecom Questions — {{property}}", body: "Hi,\n\nPlease upload the ISP / telecom agreements for {{property}} and answer the telecom questions here:\n\n[Formstack link]\n\nThank you,\nAdvisory Service Team" }] }),
+      guide: "To the RPM + responsible Client Services member. The email carries Scott's instructions, FCC map guidance and the Formstack upload link.",
+      emailTemplates: [{ label: "Email template", to: "{{rpmEmail}}", subject: "ISP Contracts Needed — {{property}}", body: "Hi,\n\nAs part of Greystar Advisory Services Due Diligence for {{property}}, we need copies of every ISP / telecom agreement in place at the property (internet, TV, Wi-Fi, rights of entry, marketing agreements).\n\n[Scott's property-contract collection instructions]\n\nFCC map: you can check providers reported at the address at https://broadbandmap.fcc.gov.\n\nPlease upload contracts and answer the telecom questions here: [Formstack link]\n\nThank you,\nAdvisory Service Team" }] }),
     TD(1, "Escalation sent to client, property operations, and client services contacts", AS, { tag: "If no response", optional: true, panel: ["ispRequest"],
       guide: "Only if nothing comes back. Escalation timing still open.",
       emailTemplates: [{ label: "Email template", to: "{{rpmEmail}}", subject: "Follow-Up: ISP Contracts Still Needed — {{property}}", body: "Hi,\n\nFollowing up on our request for the ISP / telecom agreements at {{property}}. We're copying ownership ({{client}}) and Client Services so we can close this out — Due Diligence can't be completed without them.\n\nUpload link: [Formstack link]\n\nThank you,\nAdvisory Service Team" }] }),
@@ -1737,7 +1738,7 @@ function ddTemplate(done) {
   ], done);
 }
 // Load-bearing Due Diligence to-do texts (drive dates / derived state).
-const DD_SCOPE_STEP = "Due Diligence agreement sent and executed";
+const DD_SCOPE_STEP = "Due diligence scope selected";
 const DD_PRESENTED_STEP = "Findings, service options, and economic modeling presented to client";
 const DD_DECISION_STEP = "Client next step selected";
 
@@ -4109,7 +4110,7 @@ function PropertiesView({ properties: allRows, onOpenProperty, callNotes, search
             <button className={mode === "property" ? "on" : ""} onClick={() => setMode("property")} role="tab" aria-selected={mode === "property"}>Property</button>
           </div>
           <button className={`pf-chip${!phaseFilter ? " on" : ""}`} onClick={() => setPhaseFilter && setPhaseFilter(null)} title="Clear the phase filter">All phases <b>{allRows.length}</b></button>
-          {[["projectOversight", "Project oversight"], ["buildingTech", "National contracting / technology partners"]].map(([k, label]) => (
+          {[["projectOversight", "Project oversight"], ["buildingTech", "Building technology"]].map(([k, label]) => (
             <button key={k} className={`pf-chip${needFilter === k ? " on" : ""}${needCounts[k] ? "" : " zero"}`} onClick={() => setNeedFilter(needFilter === k ? null : k)} title="Flagged during Discovery as a need outside the advisory-services scope">⚑ {label} <b>{needCounts[k]}</b></button>
           ))}
           <input type="text" placeholder={mode === "owner" ? "Search owners or properties" : "Search properties"} value={search} onChange={(e) => setSearch(e.target.value)} style={{ minWidth: 260 }} aria-label="Search" />
@@ -5668,13 +5669,15 @@ function ProgramModal({ property, onClose, onOpenPhase, onSetManualStatus, onSet
 // "Client selected next step" — the last Due Diligence to-do. Saved to
 // program.decision. Each option's guide is a TEMPORARY meeting note.
 const NEXT_STEP_OPTIONS = [
-  { value: "rfp", label: "Run RFP", guide: "RFP is covered under the Due Diligence contract (100% of the DD fee is credited), so no amendment is needed. The RFP phase opens next." },
+  { value: "rfp", label: "Run RFP", guide: "RFP is covered under the Due Diligence contract, so no amendment is needed. The RFP phase opens next." },
   { value: "amendment", label: "Advisory amendment", guide: "Client skips the RFP and goes straight to deployment (or whatever else they select us for). Moves to Advisory Service Amendment to contract it." },
-  { value: "track", label: "Track property or contract expiration", guide: "Not interested or not eligible yet, or revisit before the ISP term ends. Stays open with no active phase; set the review point below." },
+  { value: "track", label: "Track property", guide: "Not interested or not eligible yet (\"purgatory\"). Stays open with no active phase. Wording TBD with Scott." },
+  { value: "trackContract", label: "Track existing contract for expiration", guide: "Revisit before the ISP term ends. Review point is 9 months out for now; 12 months is under discussion." },
   { value: "closed", label: "Close", guide: "No further discussion. Closes the property and asks for a reason." },
 ];
-// v2 had separate "track" and "trackContract"; the team's list merges them.
-const normalizeDecision = (v) => v === "trackContract" ? "track" : v;
+// The 11-23 meeting keeps Track property and Track existing contract for
+// expiration as separate options (the team's draft had merged them).
+const normalizeDecision = (v) => v;
 const NEXT_STEP_VALUES = NEXT_STEP_OPTIONS.map((o) => o.value);
 const nextStepOf = (program) => NEXT_STEP_OPTIONS.find((o) => o.value === normalizeDecision(program && program.decision)) || null;
 const DEFAULT_CONTRACT_REVIEW_MONTHS = 9;
@@ -5739,6 +5742,7 @@ const CHECKLIST_V3_MAP = {
     "Contract PDF sent after discovery call": "Advisory Services overview and contract PDF sent to client",
     "Intake form and services one-pager sent (prospects without a PMA)": null,
     "Additional client needs reviewed (project oversight / building technology)": "Additional project-oversight needs identified",
+    "Other national contracting services and technology partners discussed": "Additional building-technology needs identified",
     "Greystar Managed Operations notified of owner engagement": "Template email sent to RPM and property team",
     "Tracker input — if no further discussion, enter owner and property details and mark the opportunity closed": "If no further discussion, owner and property details added and opportunity marked as closed",
     "Tracker input — if client wants to proceed, enter owner and property details in master tracker, send client intake form to client, request ISP contracts for each property": "Client and property details reviewed and verified in tracker",
@@ -5749,13 +5753,13 @@ const CHECKLIST_V3_MAP = {
     "Client reviews due diligence findings and recommendation": null,
     "Work with client to define which services to proceed with (advisory services)": "Worked with client to define which services to proceed with",
     "Intake form / bulk intake Excel sent to client (if needed)": "Intake form or bulk intake Excel sent to client",
-    "Client completed intake form / bulk intake Excel": null,
+    "Client completed intake form / bulk intake Excel": "Client completed intake form or bulk intake Excel",
     "NSC drafts advisory services agreement for business unit review": ADVISORY_DRAFT_STEP,
     "Advisory Services approved business terms": "Business terms approved",
     "Draft agreement sent to client for review": "Agreement sent to client",
     "Redlines exchanged between client and NSC": "Client and NSC redlines completed",
     "NSC finalizes agreement for execution": "Agreement finalized for execution",
-    "Form sent to Client Services": null,
+    "Form sent to Client Services": "Form sent to Client Services",
     "Contract out for signatures": "Contract sent out for signatures",
     "Advisory contract uploaded via Ironclad import, contract PDF attached": ADVISORY_UPLOAD_STEP,
     "Record track selection in master tracker: RFP track, incumbent negotiation track, or both": null,
@@ -5770,6 +5774,9 @@ const CHECKLIST_V3_MAP = {
     "Advisory Services contract executed": null,
     "Begin property & contract due diligence": null,
     "Due diligence scope selected": null,
+    "Due Diligence agreement sent and executed": null,
+    "Due Diligence fee invoiced": null,
+    "Contract upload (Formstack) link sent": "ISP contracts requested for each property",
     "Obtain necessary property contracts and relevant agreements. Engage outside counsel to see if they have the incumbent contracts on file": "ISP contracts requested for each property",
     "Enter contracts into master tracker, add property notes, update program status, track down missing contracts with property": "ISP contracts received for each property and uploaded to tracker",
     "ISP contracts received and uploaded to tracker": "ISP contracts received for each property and uploaded to tracker",
@@ -6031,11 +6038,11 @@ function ChecklistDataPanel({ panelKey, property, todos, ispList, rfpProposals, 
     }
     case "discoveryFlags": {
       const f = program.flags || {};
-      const set = (k, v) => { onLog(k === "projectOversight" ? "Flag: project oversight" : "Flag: national contracting / technology partners", f[k] ? "Yes" : "No", v ? "Yes" : "No"); onPatchProgram((pp) => ({ ...pp, flags: { ...(pp.flags || {}), [k]: v } })); };
+      const set = (k, v) => { onLog(k === "projectOversight" ? "Flag: project oversight" : "Flag: building technology", f[k] ? "Yes" : "No", v ? "Yes" : "No"); onPatchProgram((pp) => ({ ...pp, flags: { ...(pp.flags || {}), [k]: v } })); };
       return (
         <div>
           <label className="cl2-check"><input type="checkbox" checked={!!f.projectOversight} onChange={(e) => set("projectOversight", e.target.checked)} /> Additional project-oversight need</label>
-          <label className="cl2-check"><input type="checkbox" checked={!!f.buildingTech} onChange={(e) => set("buildingTech", e.target.checked)} /> National contracting / technology partners</label>
+          <label className="cl2-check"><input type="checkbox" checked={!!f.buildingTech} onChange={(e) => set("buildingTech", e.target.checked)} /> Additional building-technology need</label>
           <div className="dim" style={{ fontSize: 10.5, marginTop: 4 }}>Saved on the property record; filter for them on the Properties page.</div>
         </div>
       );
@@ -6156,7 +6163,7 @@ function ChecklistDataPanel({ panelKey, property, todos, ispList, rfpProposals, 
               <button className="btn-ghost" onClick={() => onPatchProgram((pp) => ({ ...pp, phaseData: { ...pp.phaseData, rfp: { ...(pp.phaseData.rfp || {}), todos: ((pp.phaseData.rfp && pp.phaseData.rfp.todos) || defaultTodosFor("rfp")).map((t) => t.done ? t : { ...t, done: true, skipped: true }), done: true, completedDate: TODAY, skippedReason: "Advisory amendment selected after Due Diligence" } } }))}>Mark RFP track not needed</button>
             </div>
           )}
-          {cur && cur.value === "track" && (
+          {cur && cur.value === "trackContract" && (
             <div style={{ marginTop: 8 }}>
               {guidance && <div className="cl2-guide">Review point: 9 months before term end for now; 12 months is under discussion.</div>}
               <Cl2Row label="Review point"><select className="cl2-input" value={months} onChange={(e) => onPatchProgram((pp) => ({ ...pp, contractReviewMonths: Number(e.target.value) }))}>
@@ -13691,7 +13698,7 @@ function App() {
       } else if (p.program.decision === "closed") {
         prog = { ...prog, manualStatus: p.program.manualStatus === "Closed" ? null : p.program.manualStatus, closedDate: null };
       }
-      if (value === "track" && !prog.contractReviewMonths) prog.contractReviewMonths = DEFAULT_CONTRACT_REVIEW_MONTHS;
+      if (value === "trackContract" && !prog.contractReviewMonths) prog.contractReviewMonths = DEFAULT_CONTRACT_REVIEW_MONTHS;
       // Re-evaluate Due Diligence completion now that the derived step moved.
       const dd = prog.phaseData && prog.phaseData.dueDiligence;
       if (dd && Array.isArray(dd.todos)) {
